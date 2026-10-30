@@ -1,8 +1,10 @@
 # dsh-plugin-guard 🛡️
 
-[![CI](https://github.com/kybconnor/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/kybconnor/dsh-plugin-guard/actions/workflows/ci.yml)
+[![CI](https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![npm version](https://img.shields.io/badge/npm-v0.1.0-orange.svg)](https://www.npmjs.com/package/dsh-plugin-guard)
+[![dsh-plugin](https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg)](https://github.com/topics/dsh-plugin)
+[![cordis](https://img.shields.io/badge/framework-cordis-blueviolet.svg)](https://github.com/topics/cordis-plugin)
 
 > **DeepSeek Harness (DSH) 插件安装前置安全预审与门禁拦截中间件。**
 
