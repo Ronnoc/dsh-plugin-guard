@@ -40,6 +40,10 @@ This exposes users to critical supply-chain risks:
   - **Privilege & Permission Escalation**: Detects attempts to tamper with prompt confirmation gates or bypass permission checks.
   - **MCP Tool Capability Audit**: Inspects exported Model Context Protocol tools for destructive capabilities.
 - 🔐 **Tamper-Proof Approval Tokens**: Generates single-use, cryptographically signed (HMAC-SHA256) approval tokens binding `package@version` and pristine tarball SHA-256. Prevents replay attacks and TOCTOU tampering.
+- ⚡ **Multi-Dimensional Local Disk Cache (4-Vector Addressing)**: Composite content-addressed caching keyed by `(model, plugin-guard version, plugin spec, tarballSha256)`.
+  - **Zero Duplicate I/O & Zero AI Token Waste**: Auditing identical package tarballs under the same model hits disk cache in milliseconds without re-extraction or repeated LLM calls.
+  - **Rule Version Invalidation**: Automatic cache invalidation when rules or guard version update.
+  - **Model Isolation**: Segregates verdicts across `static` rule engine and LLM models (`deepseek-chat`, `deepseek-reasoner`, etc.).
 - 🚪 **Dual-Layer Interception Gate**:
   - **Client UI Layer**: Injects pre-install review prompt into the DSH marketplace, presenting findings before package installation.
   - **Host Route Gate**: Intercepts `/api/plugin-manager/install` on the host side, rejecting any installation request that lacks a valid approval token.
