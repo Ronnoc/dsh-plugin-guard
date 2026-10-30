@@ -6,8 +6,9 @@ import {
   inject,
 } from '../src/client.js'
 import type { AuditReport } from '../src/core/types.js'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { execSync } from 'node:child_process'
 
 describe('client module', () => {
   it('has expected metadata', () => {
@@ -210,7 +211,11 @@ describe('client module', () => {
   })
 
   it('built lib/client.js contains valid ModuleLoader registration and no top-level import/export', () => {
-    const clientJs = readFileSync(resolve('lib/client.js'), 'utf-8')
+    const clientPath = resolve('lib/client.js')
+    if (!existsSync(clientPath)) {
+      execSync('node scripts/build-client.mjs', { stdio: 'pipe' })
+    }
+    const clientJs = readFileSync(clientPath, 'utf-8')
 
     // Must not contain ES import/export keywords outside quotes
     expect(clientJs).not.toMatch(/^import\s+/m)
