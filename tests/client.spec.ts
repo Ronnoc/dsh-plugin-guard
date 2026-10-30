@@ -1,8 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   formatAuditSummary,
-  fetchAuditReport,
-  approvePackageInstall,
   apply,
   name,
   inject,
@@ -14,7 +12,7 @@ import { resolve } from 'node:path'
 describe('client module', () => {
   it('has expected metadata', () => {
     expect(name).toBe('dsh-plugin-guard')
-    expect(inject).toContain('remote')
+    expect(Array.isArray(inject)).toBe(true)
   })
 
   it('formats audit summary accurately', () => {
@@ -65,13 +63,20 @@ describe('client module', () => {
     expect(summary).toContain('CRITICAL')
   })
 
-  it('hooks ctx.remote.pluginManager.installBundle correctly', async () => {
-    const mockInstallBundle = vi.fn().mockResolvedValue({ ok: true })
+  it('hooks ctx.remote.pluginManager.installBundle correctly when defined as getter (real DSH runtime)', async () => {
+    const mockInstallBundle = vi.fn().mockImplementation((spec: string, opts: any) => Promise.resolve({ ok: true, spec, opts }))
+    
+    // Simulate DSH RemoteNamespaceService with getter-only property in strict mode
+    const pm: any = {}
+    Object.defineProperty(pm, 'installBundle', {
+      configurable: true,
+      enumerable: true,
+      get: () => mockInstallBundle,
+    })
+
     const ctx = {
       remote: {
-        pluginManager: {
-          installBundle: mockInstallBundle,
-        },
+        pluginManager: pm,
       },
     }
 
@@ -113,19 +118,74 @@ describe('client module', () => {
 
     vi.stubGlobal('fetch', fetchMock)
 
-    apply(ctx)
+    // apply must not throw TypeError: Cannot set property ... which has only a getter
+    expect(() => apply(ctx)).not.toThrow()
 
     // Verify it was wrapped
     expect((ctx.remote.pluginManager.installBundle as any).__guarded).toBe(true)
 
     // Execute installBundle
-    await ctx.remote.pluginManager.installBundle('clean-pkg@1.0.0', { selection: true })
+    const res = await ctx.remote.pluginManager.installBundle('clean-pkg@1.0.0', { selection: true })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(mockInstallBundle).toHaveBeenCalledWith('clean-pkg@1.0.0', {
       selection: true,
       auditToken: 'test-token-123',
     })
+    expect(res).toEqual({
+      ok: true,
+      spec: 'clean-pkg@1.0.0',
+      opts: { selection: true, auditToken: 'test-token-123' },
+    })
+
+    vi.unstubAllGlobals()
+  })
+
+  it('hooks ctx.pluginManager.install correctly', async () => {
+    const mockInstall = vi.fn().mockResolvedValue({ ok: true })
+    const ctx = {
+      pluginManager: {
+        install: mockInstall,
+      },
+    }
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/audit')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              report: {
+                spec: 'foo@1.0.0',
+                packageName: 'foo',
+                version: '1.0.0',
+                tarballSha256: '999',
+                verdict: 'SAFE',
+                score: 100,
+                findings: [],
+                permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+                stagedAt: Date.now(),
+              },
+            }),
+        })
+      }
+      if (url.includes('/approve')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true, auditToken: 'tok-abc', report: {} }),
+        })
+      }
+      return Promise.reject(new Error(`Unhandled URL: ${url}`))
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    apply(ctx)
+    expect((ctx.pluginManager.install as any).__guarded).toBe(true)
+
+    await ctx.pluginManager.install('foo@1.0.0')
+    expect(mockInstall).toHaveBeenCalledWith('foo@1.0.0?auditToken=tok-abc')
 
     vi.unstubAllGlobals()
   })

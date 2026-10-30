@@ -8,7 +8,7 @@ import type { AuditReport } from './core/types.js'
 import { GUARD_API_PREFIX } from './core/constants.js'
 
 export const name = 'dsh-plugin-guard'
-export const inject = ['remote']
+export const inject: string[] = []
 
 export interface RemotePluginManager {
   installBundle(spec: string, options?: unknown): Promise<unknown>
@@ -25,6 +25,7 @@ export interface ClientContext {
     pluginManager?: RemotePluginManager
     [key: string]: unknown
   }
+  'remote.pluginManager'?: RemotePluginManager
   inject?(deps: string[], callback: (ctx: ClientContext) => void): void
   [key: string]: unknown
 }
@@ -125,50 +126,175 @@ async function auditAndConfirm(spec: string): Promise<string> {
 }
 
 /**
- * Mount the client-side decorator onto DSH pluginManager and remote.pluginManager.
+ * Safely patch installBundle on remote pluginManager (supporting getter-only descriptors).
  */
-export function apply(ctx: ClientContext): void {
-  function hookRemote() {
-    const pm = ctx.remote?.pluginManager
-    if (!pm || typeof pm.installBundle !== 'function') return
-    if ((pm.installBundle as { __guarded?: boolean }).__guarded) return
+function patchInstallBundle(pm: any): boolean {
+  if (!pm || pm.__pluginGuardInstallBundlePatched) return false
 
-    const originalInstallBundle = pm.installBundle.bind(pm)
-    const guardedInstallBundle = async (spec: string, options?: unknown): Promise<unknown> => {
-      // Run pre-installation audit & confirmation gate
+  const desc = Object.getOwnPropertyDescriptor(pm, 'installBundle')
+
+  if (desc?.get) {
+    const origGet = desc.get
+    try {
+      Object.defineProperty(pm, 'installBundle', {
+        configurable: true,
+        enumerable: true,
+        get: function (this: any) {
+          const rawFn = origGet.call(this)
+          const guarded = async (spec: string, options?: any) => {
+            const auditToken = await auditAndConfirm(spec)
+            return rawFn(spec, {
+              ...(typeof options === 'object' && options !== null ? options : {}),
+              auditToken,
+            })
+          }
+          ;(guarded as any).__guarded = true
+          return guarded
+        },
+      })
+      pm.__pluginGuardInstallBundlePatched = true
+      return true
+    } catch (err) {
+      console.warn('[dsh-plugin-guard] Failed to define getter on pm.installBundle:', err)
+      return false
+    }
+  }
+
+  if (typeof pm.installBundle === 'function') {
+    const rawFn = pm.installBundle.bind(pm)
+    const guarded = async (spec: string, options?: any) => {
       const auditToken = await auditAndConfirm(spec)
-      return originalInstallBundle(spec, {
+      return rawFn(spec, {
         ...(typeof options === 'object' && options !== null ? options : {}),
         auditToken,
       })
     }
-    guardedInstallBundle.__guarded = true
-    pm.installBundle = guardedInstallBundle
-  }
+    ;(guarded as any).__guarded = true
 
-  function hookLocal() {
-    const pm = ctx.pluginManager
-    if (!pm || typeof pm.install !== 'function') return
-    if ((pm.install as { __guarded?: boolean }).__guarded) return
-
-    const originalInstall = pm.install.bind(pm)
-    const guardedInstall = async (spec: string): Promise<unknown> => {
-      const auditToken = await auditAndConfirm(spec)
-      return originalInstall(`${spec}?auditToken=${auditToken}`)
+    try {
+      Object.defineProperty(pm, 'installBundle', {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: guarded,
+      })
+      pm.__pluginGuardInstallBundlePatched = true
+      return true
+    } catch {
+      try {
+        pm.installBundle = guarded
+        pm.__pluginGuardInstallBundlePatched = true
+        return true
+      } catch (err) {
+        console.warn('[dsh-plugin-guard] Failed to set pm.installBundle:', err)
+        return false
+      }
     }
-    guardedInstall.__guarded = true
-    pm.install = guardedInstall
   }
 
-  // Hook immediately
-  hookRemote()
-  hookLocal()
+  return false
+}
 
-  // Also hook if remote arrives later via Cordis dependency injection
-  if (typeof ctx.inject === 'function') {
-    ctx.inject(['remote'], () => {
-      hookRemote()
-    })
+/**
+ * Safely patch install on local pluginManager.
+ */
+function patchInstall(pm: any): boolean {
+  if (!pm || pm.__pluginGuardInstallPatched) return false
+
+  const desc = Object.getOwnPropertyDescriptor(pm, 'install')
+
+  if (desc?.get) {
+    const origGet = desc.get
+    try {
+      Object.defineProperty(pm, 'install', {
+        configurable: true,
+        enumerable: true,
+        get: function (this: any) {
+          const rawFn = origGet.call(this)
+          const guarded = async (spec: string, ...args: any[]) => {
+            const auditToken = await auditAndConfirm(spec)
+            const decoratedSpec = spec.includes('?') ? `${spec}&auditToken=${auditToken}` : `${spec}?auditToken=${auditToken}`
+            return rawFn(decoratedSpec, ...args)
+          }
+          ;(guarded as any).__guarded = true
+          return guarded
+        },
+      })
+      pm.__pluginGuardInstallPatched = true
+      return true
+    } catch (err) {
+      console.warn('[dsh-plugin-guard] Failed to define getter on pm.install:', err)
+      return false
+    }
+  }
+
+  if (typeof pm.install === 'function') {
+    const rawFn = pm.install.bind(pm)
+    const guarded = async (spec: string, ...args: any[]) => {
+      const auditToken = await auditAndConfirm(spec)
+      const decoratedSpec = spec.includes('?') ? `${spec}&auditToken=${auditToken}` : `${spec}?auditToken=${auditToken}`
+      return rawFn(decoratedSpec, ...args)
+    }
+    ;(guarded as any).__guarded = true
+
+    try {
+      Object.defineProperty(pm, 'install', {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: guarded,
+      })
+      pm.__pluginGuardInstallPatched = true
+      return true
+    } catch {
+      try {
+        pm.install = guarded
+        pm.__pluginGuardInstallPatched = true
+        return true
+      } catch (err) {
+        console.warn('[dsh-plugin-guard] Failed to set pm.install:', err)
+        return false
+      }
+    }
+  }
+
+  return false
+}
+
+/**
+ * Mount the client-side decorator onto DSH pluginManager and remote.pluginManager.
+ */
+export function apply(ctx: ClientContext): void {
+  try {
+    const hookAll = () => {
+      if (ctx.remote?.pluginManager) {
+        patchInstallBundle(ctx.remote.pluginManager)
+      }
+      if (ctx['remote.pluginManager']) {
+        patchInstallBundle(ctx['remote.pluginManager'])
+      }
+      if (ctx.pluginManager) {
+        patchInstall(ctx.pluginManager)
+      }
+    }
+
+    hookAll()
+
+    if (typeof ctx.inject === 'function') {
+      try {
+        ctx.inject(['remote'], () => {
+          hookAll()
+        })
+      } catch {}
+
+      try {
+        ctx.inject(['remote.pluginManager'], () => {
+          hookAll()
+        })
+      } catch {}
+    }
+  } catch (err) {
+    console.error('[dsh-plugin-guard] Unexpected error in client apply:', err)
   }
 }
 
