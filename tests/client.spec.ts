@@ -63,6 +63,25 @@ describe('client module', () => {
     expect(summary).toContain('CRITICAL')
   })
 
+  it('formats audit summary with cached indicator when served from local cache', () => {
+    const cachedReport: AuditReport = {
+      spec: 'cached-pkg@1.0.0',
+      packageName: 'cached-pkg',
+      version: '1.0.0',
+      tarballSha256: 'abcdef1234567890abcdef1234567890',
+      verdict: 'SAFE',
+      score: 100,
+      cached: true,
+      findings: [],
+      permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    const summary = formatAuditSummary(cachedReport)
+    expect(summary).toContain('命中本地持久化安全缓存')
+    expect(summary).toContain('零重复消耗')
+  })
+
   it('hooks ctx.remote.pluginManager.installBundle correctly when defined as getter (real DSH runtime)', async () => {
     const mockInstallBundle = vi.fn().mockImplementation((spec: string, opts: any) => Promise.resolve({ ok: true, spec, opts }))
     

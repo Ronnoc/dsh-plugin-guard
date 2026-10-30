@@ -10,6 +10,10 @@
         scanOnInstall: true
         # Intercept any update requests
         scanOnUpdate: true
+        # Enable persistent multi-dimensional local cache (model, version, plugin, hash)
+        enableCache: true
+        # Default audit model/engine ('static', 'deepseek-chat', etc.)
+        model: "static"
         # Allowed domains for plugins (official registries and standard APIs)
         allowedDomains:
           - "registry.npmjs.org"
