@@ -1,0 +1,20 @@
+# DSH Plugin Guard: Pre-install Security Audit & Interception Gate
+# Registered as a host-authoritative Cordis plugin.
+- insert:
+    - id: dsh-plugin-guard
+      name: dsh-plugin-guard
+      config:
+        # If true, blocks installation automatically when any CRITICAL finding is detected
+        strictMode: true
+        # Intercept any install requests
+        scanOnInstall: true
+        # Intercept any update requests
+        scanOnUpdate: true
+        # Allowed domains for plugins (official registries and standard APIs)
+        allowedDomains:
+          - "registry.npmjs.org"
+          - "github.com"
+          - "api.github.com"
+          - "dsh-market.com"
+        # Temporary staging time-to-live in ms (default 5 minutes)
+        stagingTtlMs: 300000
