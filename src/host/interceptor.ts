@@ -14,14 +14,26 @@ interface StagedCacheEntry {
   expiresAt: number
 }
 
+interface ApprovedRecord {
+  spec: string
+  packageName: string
+  version?: string
+  tarballSha256: string
+  approvedAt: number
+  expiresAt: number
+}
+
 export class GuardInterceptor {
   private config: GuardConfig
   private tokenManager: TokenManager
   private cacheManager: AuditCacheManager
   private cache = new Map<string, StagedCacheEntry>() // normalizedSpec -> StagedCacheEntry
+  private approvals = new Map<string, ApprovedRecord>() // normalizedKey -> ApprovedRecord
+  private hostContext?: any
 
-  constructor(config: GuardConfig = {}) {
+  constructor(config: GuardConfig = {}, hostContext?: any) {
     this.config = config
+    this.hostContext = hostContext
     this.tokenManager = new TokenManager(
       config.tokenSecret,
       config.stagingTtlMs ?? 300_000,
@@ -31,6 +43,13 @@ export class GuardInterceptor {
       enabled: config.enableCache ?? true,
       defaultModel: config.model ?? 'static',
     })
+  }
+
+  /**
+   * Sets the host runtime context (providing ctx.llm and ctx.agentDefaultModel).
+   */
+  setHostContext(ctx: any): void {
+    this.hostContext = ctx
   }
 
   /**
@@ -157,6 +176,7 @@ export class GuardInterceptor {
       ...options,
       model,
       cacheManager: this.cacheManager,
+      hostContext: options?.hostContext || this.hostContext,
     })
 
     const ttl = this.config.stagingTtlMs ?? 300_000
@@ -190,14 +210,86 @@ export class GuardInterceptor {
       }
     }
 
+    const ttl = this.config.stagingTtlMs ?? 300_000
     const token = this.tokenManager.generateToken(
       spec,
       report.tarballSha256,
-      this.config.stagingTtlMs ?? 300_000,
+      ttl,
     )
 
     report.auditToken = token
+
+    // Record approval in memory for host-level verification
+    const record: ApprovedRecord = {
+      spec,
+      packageName: report.packageName,
+      version: report.version,
+      tarballSha256: report.tarballSha256,
+      approvedAt: Date.now(),
+      expiresAt: Date.now() + ttl,
+    }
+
+    const normSpec = spec.trim().toLowerCase()
+    const normPkg = (report.packageName || spec).trim().toLowerCase()
+    this.approvals.set(normSpec, record)
+    this.approvals.set(normPkg, record)
+    if (report.version) {
+      this.approvals.set(`${normPkg}@${report.version}`.toLowerCase(), record)
+    }
+
     return { auditToken: token, report }
+  }
+
+  private getApprovalLookupKeys(spec: string): string[] {
+    const trimmed = spec.trim().toLowerCase()
+    const keys = [trimmed]
+
+    // Handle package@version
+    const lastAt = trimmed.lastIndexOf('@')
+    if (lastAt > 0) {
+      const name = trimmed.slice(0, lastAt)
+      keys.push(name)
+    }
+    return keys
+  }
+
+  /**
+   * Check if a spec has a valid recent approval.
+   */
+  isApproved(spec: string): boolean {
+    const now = Date.now()
+    const keys = this.getApprovalLookupKeys(spec)
+    for (const k of keys) {
+      const app = this.approvals.get(k)
+      if (app && now <= app.expiresAt) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Consume an approval (single-use).
+   */
+  consumeApproval(spec: string): boolean {
+    const now = Date.now()
+    const keys = this.getApprovalLookupKeys(spec)
+    for (const k of keys) {
+      const app = this.approvals.get(k)
+      if (app && now <= app.expiresAt) {
+        // Delete all associated keys
+        const relatedKeys = this.getApprovalLookupKeys(app.spec)
+        relatedKeys.push(app.packageName.toLowerCase())
+        if (app.version) {
+          relatedKeys.push(`${app.packageName}@${app.version}`.toLowerCase())
+        }
+        for (const rk of relatedKeys) {
+          this.approvals.delete(rk)
+        }
+        return true
+      }
+    }
+    return false
   }
 
   /**
@@ -212,26 +304,32 @@ export class GuardInterceptor {
       return { allowed: true }
     }
 
-    if (!auditToken) {
-      return {
-        allowed: false,
-        reason: '缺少安全预审放行凭证 (auditToken)。在安装插件前必须通过安全预审并获得用户确认。',
+    // 1. If explicit auditToken provided, validate via tokenManager
+    if (auditToken) {
+      const key = spec.trim().toLowerCase()
+      const cached = this.cache.get(key)
+      const expectedSha256 = cached?.session.tarballSha256
+
+      const result = this.tokenManager.consumeToken(auditToken, spec, expectedSha256)
+      if (result.valid) {
+        this.consumeApproval(spec)
+        return { allowed: true }
       }
-    }
-
-    const key = spec.trim().toLowerCase()
-    const cached = this.cache.get(key)
-    const expectedSha256 = cached?.session.tarballSha256
-
-    const result = this.tokenManager.consumeToken(auditToken, spec, expectedSha256)
-    if (!result.valid) {
       return {
         allowed: false,
         reason: result.reason ?? '安全预审凭证无效或已失效',
       }
     }
 
-    return { allowed: true }
+    // 2. If no token provided, check if spec was recently approved in this session
+    if (this.consumeApproval(spec)) {
+      return { allowed: true }
+    }
+
+    return {
+      allowed: false,
+      reason: '缺少安全预审放行凭证 (auditToken)。在安装插件前必须通过安全预审并获得用户确认。',
+    }
   }
 
   /**
@@ -242,5 +340,6 @@ export class GuardInterceptor {
       await entry.session.cleanup().catch(() => {})
     }
     this.cache.clear()
+    this.approvals.clear()
   }
 }

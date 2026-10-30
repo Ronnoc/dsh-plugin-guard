@@ -231,6 +231,7 @@ export class AuditCacheManager {
         ...report,
         model: normModel,
         pluginGuardVersion: normVersion,
+        cacheKey: cacheHash,
       },
       metadata: {
         createdAt: Date.now(),
@@ -290,7 +291,16 @@ export class AuditCacheManager {
    */
   async delete(key: AuditCacheKey): Promise<boolean> {
     const cacheHash = computeAuditCacheKey(key)
-    const filePath = join(this.auditsDir, `${cacheHash}.json`)
+    return this.deleteByHash(cacheHash)
+  }
+
+  /**
+   * Deletes a specific cache entry by its cache hash.
+   */
+  async deleteByHash(hash: string): Promise<boolean> {
+    const safeHash = hash.replace(/[^a-f0-9]/gi, '').toLowerCase()
+    if (!safeHash) return false
+    const filePath = join(this.auditsDir, `${safeHash}.json`)
     if (existsSync(filePath)) {
       try {
         unlinkSync(filePath)
@@ -352,6 +362,10 @@ export class AuditCacheManager {
         try {
           const raw = readFileSync(join(this.auditsDir, file), 'utf-8')
           const entry = JSON.parse(raw) as AuditCacheEntry
+          const hashFromFilename = file.replace(/\.json$/, '')
+          if (!entry.report.cacheKey) {
+            entry.report.cacheKey = hashFromFilename
+          }
           entries.push(entry)
         } catch {
           // ignore corrupted files
@@ -360,6 +374,9 @@ export class AuditCacheManager {
     } catch {
       // ignore
     }
+
+    // Sort by createdAt descending (most recent first)
+    entries.sort((a, b) => (b.metadata?.createdAt ?? 0) - (a.metadata?.createdAt ?? 0))
 
     return entries
   }

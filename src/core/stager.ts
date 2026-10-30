@@ -7,13 +7,14 @@
 
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import { GUARD_VERSION } from './constants.js'
 import type { AuditOptions, AuditReport, GuardConfig } from './types.js'
 import { auditPackageDirectory } from './scanner.js'
+import { auditPackageWithAgent } from './agent-reviewer.js'
 import type { AuditCacheManager } from './cache.js'
 
 const pExecFile = promisify(execFile)
@@ -58,15 +59,22 @@ export async function stageAndAuditPackage(
   }
 
   try {
+    const trimmedSpec = spec.trim()
+    if (!trimmedSpec || /[;&|`$<>]/.test(trimmedSpec)) {
+      throw new Error(`[dsh-plugin-guard] 非法的包名称或版本标识符: "${spec}"`)
+    }
+
     const scanStart = Date.now()
 
     // 1. Download tarball with --ignore-scripts to prevent any lifecycle script execution
     // npm pack outputs the filename to stdout
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
     const { stdout } = await pExecFile(
-      'npm',
-      ['pack', spec, '--pack-destination', stageDir, '--ignore-scripts'],
+      npmCmd,
+      ['pack', trimmedSpec, '--pack-destination', stageDir, '--ignore-scripts'],
       {
         windowsHide: true,
+        shell: process.platform === 'win32',
         timeout: 60000,
       },
     )
@@ -93,13 +101,13 @@ export async function stageAndAuditPackage(
       const cachedReport = await cacheManager.get({
         model,
         pluginGuardVersion: GUARD_VERSION,
-        plugin: spec,
+        plugin: trimmedSpec,
         tarballSha256,
       })
 
       if (cachedReport) {
         return {
-          spec,
+          spec: trimmedSpec,
           stageDir,
           unpackedDir: '',
           tarballPath,
@@ -111,7 +119,16 @@ export async function stageAndAuditPackage(
     }
 
     // 4. Unpack tarball safely using system tar (bsdtar is native in modern Windows/macOS/Linux)
-    await pExecFile('tar', ['-xzf', tarballPath, '-C', unpackedDir], {
+    const tarCmd =
+      process.platform === 'win32' && existsSync('C:/Windows/System32/tar.exe')
+        ? 'C:/Windows/System32/tar.exe'
+        : 'tar'
+    const tarArgs = ['-xzf', tarballPath, '-C', unpackedDir]
+    if (tarCmd === 'tar' && process.platform === 'win32') {
+      tarArgs.unshift('--force-local')
+    }
+
+    await pExecFile(tarCmd, tarArgs, {
       windowsHide: true,
       timeout: 30000,
     })
@@ -122,10 +139,18 @@ export async function stageAndAuditPackage(
       ? join(unpackedDir, 'package')
       : unpackedDir
 
-    // 5. Run static rule audit
-    const report = auditPackageDirectory(spec, packageRoot, tarballSha256, config)
-    report.model = model
-    report.pluginGuardVersion = GUARD_VERSION
+    // 5. Run agent-driven sandbox security review against standards
+    let report: AuditReport
+    if (model === 'static') {
+      report = auditPackageDirectory(spec, packageRoot, tarballSha256, config)
+      report.model = 'static'
+      report.pluginGuardVersion = GUARD_VERSION
+    } else {
+      report = await auditPackageWithAgent(spec, packageRoot, tarballSha256, config, {
+        model,
+        hostContext: options?.hostContext,
+      })
+    }
     const durationMs = Date.now() - scanStart
 
     // 6. Save audit report to persistent local disk cache

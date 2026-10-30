@@ -229,6 +229,15 @@ describe('AuditCacheManager', () => {
     expect(await cacheManager.has(key1)).toBe(false)
     expect(await cacheManager.has(key2)).toBe(true)
 
+    // Test deleteByHash
+    const key2Hash = computeAuditCacheKey(key2)
+    const deletedByHash = await cacheManager.deleteByHash(key2Hash)
+    expect(deletedByHash).toBe(true)
+    expect(await cacheManager.has(key2)).toBe(false)
+    expect((await cacheManager.list()).length).toBe(0)
+
+    // Test clear with new items
+    await cacheManager.set(key1, mockReport)
     const clearedCount = await cacheManager.clear()
     expect(clearedCount).toBe(1)
     expect((await cacheManager.list()).length).toBe(0)

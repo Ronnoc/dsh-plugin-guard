@@ -12,6 +12,7 @@ import {
   GUARD_API_PREFIX,
   LEGACY_GUARD_PREFIX,
   handleGuardRequest,
+  INTERCEPT_INSTALL_PATHS,
 } from './host/routes.js'
 
 export const name = 'dsh-plugin-guard'
@@ -44,45 +45,154 @@ export interface CordisWebServer {
 
 export interface PluginContext {
   webServer?: CordisWebServer
+  pluginManager?: any
   logger?: {
     info(msg: string, ...args: unknown[]): void
     warn(msg: string, ...args: unknown[]): void
     error(msg: string, ...args: unknown[]): void
   }
+  get?(name: string): unknown
+  inject?(deps: string[], callback: (ctx: any) => void): void
   on?(event: string, listener: (...args: unknown[]) => void): void
+}
+
+/**
+ * Monkey-patches host-side pluginManager.installBundle to enforce security audits.
+ */
+export function hookHostPluginManager(
+  pm: any,
+  interceptor: GuardInterceptor,
+  logger?: PluginContext['logger'],
+): boolean {
+  if (!pm || pm.__pluginGuardHostPatched) return false
+
+  const origInstallBundle = pm.installBundle
+  if (typeof origInstallBundle !== 'function') return false
+
+  pm.installBundle = async function (spec: string, options?: any) {
+    const config = interceptor.getConfig()
+    if (config.scanOnInstall !== false) {
+      const auditToken =
+        typeof options === 'object' && options !== null ? options.auditToken : undefined
+
+      const validation = interceptor.validateInstallRequest(spec, auditToken)
+
+      if (!validation.allowed) {
+        logger?.warn?.(
+          `[dsh-plugin-guard] 宿主插件安装请求未带放行凭证，执行后备自动安全审计: spec=${spec}`,
+        )
+        const report = await interceptor.audit(spec)
+
+        if (config.strictMode && report.verdict === 'DANGEROUS') {
+          throw new Error(
+            `[dsh-plugin-guard] 严格模式阻断：插件 ${spec} 存在高危安全漏洞 (评级: ${report.verdict}, 得分: ${report.score}/100)，禁止安装。`,
+          )
+        }
+
+        if (report.verdict === 'DANGEROUS') {
+          throw new Error(
+            `[dsh-plugin-guard] 安全拦截：插件 ${spec} 评估为高危 (评级: ${report.verdict}, 得分: ${report.score}/100)，未获放行授权凭证。`,
+          )
+        }
+
+        logger?.info?.(
+          `[dsh-plugin-guard] 插件 ${spec} 静态审计评估通过 (评级: ${report.verdict})，放行安装。`,
+        )
+      } else {
+        logger?.info?.(`[dsh-plugin-guard] 插件 ${spec} 凭借已授权凭证/预审记录放行安装。`)
+      }
+    }
+
+    return origInstallBundle.call(this, spec, options)
+  }
+
+  pm.__pluginGuardHostPatched = true
+  logger?.info?.('[dsh-plugin-guard] 宿主 pluginManager.installBundle 安全门禁装载完成。')
+  return true
 }
 
 /**
  * Mount the host-side Cordis plugin.
  */
 export function apply(ctx: PluginContext, config: GuardConfig = {}): void {
-  const interceptor = new GuardInterceptor(config)
+  const interceptor = new GuardInterceptor(config, ctx)
   const webServer = ctx.webServer
 
-  if (!webServer) {
-    ctx.logger?.warn?.('[dsh-plugin-guard] webServer service not found in Cordis context. Guard routes cannot be bound.')
-    return
+  // Multi-context hook for host pluginManager (lazy loaded Cordis service)
+  const tryHookPm = (targetCtx: any) => {
+    if (!targetCtx) return
+    const pm = targetCtx.get?.('pluginManager') ?? targetCtx.pluginManager
+    if (pm) hookHostPluginManager(pm, interceptor, ctx.logger)
+    interceptor.setHostContext(targetCtx)
   }
 
-  ctx.logger?.info?.('[dsh-plugin-guard] Initializing security guard and route gates...')
+  tryHookPm(ctx)
 
-  // Register modern prefix: /api/plugin-guard
-  webServer.register({
-    kind: 'prefix',
-    path: GUARD_API_PREFIX,
-    handler: async (req, res) => {
-      await handleGuardRequest(req, res, { interceptor })
-    },
-  })
+  if (typeof ctx.inject === 'function') {
+    try {
+      ctx.inject(['pluginManager'], (c: any) => {
+        tryHookPm(c)
+        tryHookPm(ctx)
+      })
+    } catch {}
 
-  // Register legacy compatibility prefix: /gateway/guard
-  webServer.register({
-    kind: 'prefix',
-    path: LEGACY_GUARD_PREFIX,
-    handler: async (req, res) => {
-      await handleGuardRequest(req, res, { interceptor })
-    },
-  })
+    try {
+      ctx.inject(['llm'], (c: any) => {
+        interceptor.setHostContext(c || ctx)
+      })
+    } catch {}
+
+    try {
+      ctx.inject(['agentDefaultModel'], (c: any) => {
+        interceptor.setHostContext(c || ctx)
+      })
+    } catch {}
+
+    try {
+      ctx.inject(['webServer'], (c: any) => {
+        tryHookPm(c)
+        tryHookPm(ctx)
+      })
+    } catch {}
+  }
+
+  if (webServer) {
+    ctx.logger?.info?.('[dsh-plugin-guard] Initializing security guard and route gates...')
+
+    // Wrap webServer.register to intercept installer routes if registered
+    const origRegister = webServer.register.bind(webServer)
+    webServer.register = function (route: any) {
+      if (route && typeof route.path === 'string' && INTERCEPT_INSTALL_PATHS.has(route.path)) {
+        const origHandler = route.handler
+        route.handler = async function (req: IncomingMessage, res: ServerResponse) {
+          const handled = await handleGuardRequest(req, res, { interceptor })
+          if (handled) return
+          return origHandler(req, res)
+        }
+      }
+      return origRegister(route)
+    }
+
+    // Register modern prefix: /api/plugin-guard
+    webServer.register({
+      kind: 'prefix',
+      path: GUARD_API_PREFIX,
+      handler: async (req, res) => {
+        await handleGuardRequest(req, res, { interceptor })
+      },
+    })
+
+    // Register legacy compatibility prefix: /gateway/guard
+    webServer.register({
+      kind: 'prefix',
+      path: LEGACY_GUARD_PREFIX,
+      handler: async (req, res) => {
+        await handleGuardRequest(req, res, { interceptor })
+      },
+    })
+  } else {
+    ctx.logger?.warn?.('[dsh-plugin-guard] webServer service not found in Cordis context. Guard routes cannot be bound.')
+  }
 
   // Cleanup on context dispose
   if (typeof ctx.on === 'function') {
@@ -100,6 +210,7 @@ export * from './core/types.js'
 export * from './core/cache.js'
 export * from './core/stager.js'
 export * from './core/scanner.js'
+export * from './core/agent-reviewer.js'
 export * from './host/token.js'
 export * from './host/interceptor.js'
 export * from './host/routes.js'

@@ -4,6 +4,7 @@ import {
   apply,
   name,
   inject,
+  patchFetch,
 } from '../src/client.js'
 import type { AuditReport } from '../src/core/types.js'
 import { readFileSync, existsSync } from 'node:fs'
@@ -243,5 +244,141 @@ describe('client module', () => {
     const moduleExports = registeredPayload.factory(() => ({}))
     expect(moduleExports.name).toBe('dsh-plugin-guard')
     expect(typeof moduleExports.apply).toBe('function')
+  })
+
+  it('patchFetch intercepts /dshm install requests and attaches audit token on approval', async () => {
+    let dshmReceivedBody: any = null
+    const fetchMock = vi.fn().mockImplementation((url: string, opts?: any) => {
+      if (url.includes('/api/plugin-guard/audit')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              report: {
+                spec: 'dsh-claude-style@0.19.6',
+                packageName: 'dsh-claude-style',
+                version: '0.19.6',
+                tarballSha256: 'sha256-mock',
+                verdict: 'SAFE',
+                score: 100,
+                findings: [],
+                permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+              },
+            }),
+        })
+      }
+      if (url.includes('/api/plugin-guard/approve')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              auditToken: 'approved-token-xyz',
+              report: {},
+            }),
+        })
+      }
+      if (url === '/dshm' || url.endsWith('/dshm')) {
+        dshmReceivedBody = JSON.parse(opts.body)
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true, installed: true }),
+        })
+      }
+      return Promise.reject(new Error(`Unhandled URL: ${url}`))
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+    patchFetch()
+
+    // Simulate dsh-m install request
+    const res = await fetch('/dshm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'install', id: 'dsh-claude-style', version: '0.19.6' }),
+    })
+    const data = await res.json()
+
+    expect(data.ok).toBe(true)
+    expect(dshmReceivedBody).toBeDefined()
+    expect(dshmReceivedBody.auditToken).toBe('approved-token-xyz')
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/plugin-guard/audit?spec=dsh-claude-style%400.19.6')
+    expect(fetchMock.mock.calls[1][0]).toContain('/api/plugin-guard/approve')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('patchFetch aborts /dshm install when user rejects dangerous warning', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/plugin-guard/audit')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              ok: true,
+              report: {
+                spec: 'dsh-claude-style@0.19.6',
+                packageName: 'dsh-claude-style',
+                version: '0.19.6',
+                tarballSha256: 'sha256-mock',
+                verdict: 'DANGEROUS',
+                score: 20,
+                findings: [
+                  {
+                    ruleId: 'SEC-SUBPROC-001',
+                    category: 'subprocesses',
+                    severity: 'HIGH',
+                    title: 'Dangerous execution',
+                    description: 'test',
+                    file: 'lib/client.js',
+                  },
+                ],
+                permissions: { network: [], filesystem: [], subprocesses: true, mcpTools: [] },
+              },
+            }),
+        })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+    // User clicks Cancel on confirm dialog
+    vi.stubGlobal('window', { confirm: () => false })
+    patchFetch()
+
+    await expect(
+      fetch('/dshm', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ method: 'install', id: 'dsh-claude-style' }),
+      }),
+    ).rejects.toThrow(/\[dsh-plugin-guard\] 用户中止了高危插件 dsh-claude-style 的安装/)
+
+    vi.unstubAllGlobals()
+  })
+
+  it("registers settings.section and plugins.bundle.config slots in client apply", () => {
+    const registered: any[] = []
+    const mockCtx = {
+      slots: {
+        inject: (name: string, fn: any) => fn(),
+        register: (options: any, comp: any) => {
+          registered.push({ options, comp })
+          return () => {}
+        },
+      },
+    }
+    apply(mockCtx as any)
+    const settingsSlot = registered.find(r => r.options.name === "settings.section")
+    const bundleSlot = registered.find(r => r.options.name === "plugins.bundle.config")
+    const rowSlot = registered.find(r => r.options.name === "plugins.row.config")
+
+    expect(settingsSlot).toBeDefined()
+    expect(settingsSlot?.options.id).toBe("plugin-guard")
+    expect(bundleSlot).toBeDefined()
+    expect(bundleSlot?.options.key).toBe("dsh-plugin-guard")
+    expect(rowSlot).toBeDefined()
+    expect(rowSlot?.options.key).toBe("dsh-plugin-guard#dsh-plugin-guard")
   })
 })

@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Config } from '../src/index.js'
+import { Config, hookHostPluginManager } from '../src/index.js'
 import { GuardInterceptor } from '../src/host/interceptor.js'
 import type { AuditReport } from '../src/core/types.js'
+import { vi } from 'vitest'
 
 describe('GuardInterceptor', () => {
   let testCacheDir: string
@@ -135,5 +136,104 @@ describe('GuardInterceptor', () => {
     expect(updated.model).toBe('deepseek-chat')
     expect(updated.enableCache).toBe(false)
     expect(interceptor.getCacheManager().isEnabled()).toBe(false)
+  })
+
+  it('tracks user approval for dsh-m without explicit token', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      cacheDir: testCacheDir,
+    })
+
+    const mockReport: AuditReport = {
+      spec: 'dsh-claude-style@0.19.6',
+      packageName: 'dsh-claude-style',
+      version: '0.19.6',
+      tarballSha256: '92bf19aa87349586',
+      verdict: 'SAFE',
+      score: 90,
+      findings: [],
+      permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockReport)
+
+    // User approves via client UI
+    await interceptor.approve('dsh-claude-style@0.19.6')
+
+    // Host checks approval
+    expect(interceptor.isApproved('dsh-claude-style@0.19.6')).toBe(true)
+    expect(interceptor.isApproved('dsh-claude-style')).toBe(true)
+
+    // validateInstallRequest without auditToken should pass because it was approved
+    const check = interceptor.validateInstallRequest('dsh-claude-style@0.19.6')
+    expect(check.allowed).toBe(true)
+
+    // Subsequent install without fresh approval should fail (single-use)
+    const secondCheck = interceptor.validateInstallRequest('dsh-claude-style@0.19.6')
+    expect(secondCheck.allowed).toBe(false)
+  })
+
+  it('hookHostPluginManager blocks unapproved dangerous package and allows approved package', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      strictMode: true,
+    })
+
+    const mockDangerousReport: AuditReport = {
+      spec: 'dsh-malicious@1.0.0',
+      packageName: 'dsh-malicious',
+      version: '1.0.0',
+      tarballSha256: 'badbad123',
+      verdict: 'DANGEROUS',
+      score: 10,
+      findings: [
+        {
+          ruleId: 'SEC-CRED-001',
+          category: 'credentials',
+          severity: 'CRITICAL',
+          title: 'Steals secrets',
+          description: 'bad',
+          file: 'index.js',
+        },
+      ],
+      permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockDangerousReport)
+
+    const rawInstallBundle = vi.fn().mockResolvedValue({ installed: true })
+    const pm = {
+      installBundle: rawInstallBundle,
+    }
+
+    hookHostPluginManager(pm, interceptor)
+
+    // Calling unapproved dangerous package should throw and block
+    await expect(pm.installBundle('dsh-malicious@1.0.0')).rejects.toThrow(
+      /严格模式阻断：插件 dsh-malicious@1.0.0 存在高危安全漏洞/,
+    )
+    expect(rawInstallBundle).not.toHaveBeenCalled()
+
+    // Now test with approved package
+    const mockSafeReport: AuditReport = {
+      spec: 'safe-pkg@1.0.0',
+      packageName: 'safe-pkg',
+      version: '1.0.0',
+      tarballSha256: 'good123',
+      verdict: 'SAFE',
+      score: 100,
+      findings: [],
+      permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockSafeReport)
+    await interceptor.approve('safe-pkg@1.0.0')
+
+    const res = await pm.installBundle('safe-pkg@1.0.0')
+    expect(res).toEqual({ installed: true })
+    expect(rawInstallBundle).toHaveBeenCalledWith('safe-pkg@1.0.0', undefined)
   })
 })

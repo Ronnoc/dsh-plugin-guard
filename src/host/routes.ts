@@ -14,7 +14,7 @@ import type { GuardInterceptor } from './interceptor.js'
  * @module dsh-plugin-guard/host/routes
  */
 
-const INTERCEPT_INSTALL_PATHS = new Set([
+export const INTERCEPT_INSTALL_PATHS = new Set([
   '/api/plugin-manager/install',
   '/gateway/install',
   '/api/plugins/install',
@@ -206,6 +206,12 @@ export async function handleGuardRequest(
       return true
     }
     if (req.method === 'DELETE') {
+      const hash = parsed.searchParams.get('hash') || parsed.searchParams.get('key')
+      if (hash) {
+        const deleted = await cacheManager.deleteByHash(hash)
+        writeJson(res, 200, { ok: true, deleted })
+        return true
+      }
       const cleared = await cacheManager.clear()
       writeJson(res, 200, { ok: true, cleared })
       return true

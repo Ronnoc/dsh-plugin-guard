@@ -76,6 +76,14 @@ export interface AuditReport {
   cached?: boolean
   /** Unique composite cache key hash if cached */
   cacheKey?: string
+  /** Agent concise summary / review rationale */
+  agentSummary?: string
+  /** Agent review of intent alignment (how code matches declared plugin purpose) */
+  intentAnalysis?: string
+  /** Agent explicit recommendation: 'APPROVE' | 'REVIEW_CAREFULLY' | 'REJECT' */
+  recommendation?: 'APPROVE' | 'REVIEW_CAREFULLY' | 'REJECT'
+  /** Standards evaluated by the Agent */
+  evaluatedStandards?: string[]
 }
 
 export interface GuardConfig {
@@ -135,6 +143,8 @@ export interface AuditOptions {
   forceRefresh?: boolean
   /** Skip checking or writing to persistent cache */
   noCache?: boolean
+  /** Host context offering ctx.llm and ctx.agentDefaultModel */
+  hostContext?: any
 }
 
 export interface FileEntry {
