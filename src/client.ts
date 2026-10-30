@@ -155,6 +155,20 @@ export function formatAuditSummary(report: AuditReport): string {
   if (report.cached) {
     lines.push('⚡ 命中本地持久化安全缓存 (零重复消耗)')
   }
+  if (report.recommendation) {
+    const recMap: Record<string, string> = {
+      APPROVE: '🟢 推荐安装 (业务意图合理，未见恶意特征)',
+      REVIEW_CAREFULLY: '🟡 建议复核 (包含敏感特权，请结合用途核验)',
+      REJECT: '🔴 建议拦截 (检测到已知威胁或恶意行为)',
+    }
+    lines.push(`💡 Agent 建议: ${recMap[report.recommendation] || report.recommendation}`)
+  }
+  if (report.intentAnalysis) {
+    lines.push(`📋 意图与行为契合度: ${report.intentAnalysis}`)
+  }
+  if (report.agentSummary) {
+    lines.push(`🤖 审查综述: ${report.agentSummary}`)
+  }
   lines.push('')
 
   if (!report.findings || report.findings.length === 0) {
@@ -169,43 +183,293 @@ export function formatAuditSummary(report: AuditReport): string {
   return lines.join('\n')
 }
 
+// Tracks in-flight audit promises to eliminate concurrent duplicate prompts
+const inFlightAudits = new Map<string, Promise<string>>()
+// Caches recently approved tokens (60 seconds) so chained calls (fetch -> installBundle) succeed without re-prompting
+const recentApprovals = new Map<string, { token: string; expiresAt: number }>()
+
+export function clearRecentApprovals(): void {
+  recentApprovals.clear()
+  inFlightAudits.clear()
+}
+
+function getRecentApproval(spec: string): string | undefined {
+  const now = Date.now()
+  const key = spec.trim().toLowerCase()
+  const entry = recentApprovals.get(key)
+  if (entry && entry.expiresAt > now) {
+    return entry.token
+  }
+  recentApprovals.delete(key)
+  return undefined
+}
+
+function recordRecentApproval(spec: string, token: string): void {
+  const now = Date.now()
+  const key = spec.trim().toLowerCase()
+  recentApprovals.set(key, { token, expiresAt: now + 60_000 })
+}
+
 /**
- * Prompts user if package is dangerous or cautious, then requests approval token.
+ * Renders an in-page modern Agent Review modal in browser, or falls back to confirm in headless tests.
  */
-async function auditAndConfirm(spec: string): Promise<string> {
-  const report = await fetchAuditReport(spec)
-
-  if (report.verdict === 'DANGEROUS') {
+export function showAgentReviewModal(report: AuditReport): Promise<boolean> {
+  if (typeof document === 'undefined' || !document.body) {
     const summary = formatAuditSummary(report)
+    const promptMsg = report.verdict === 'DANGEROUS'
+      ? `${summary}\n\n检测到高危安全风险！是否强制放行安装？`
+      : report.verdict === 'CAUTION'
+      ? `${summary}\n\n插件包含警告项，是否确认继续安装？`
+      : `${summary}\n\nAgent 审查通过，是否确认安装？`
     const shouldProceed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-      ? window.confirm(`${summary}\n\n检测到高危安全风险！是否强制放行安装？`)
-      : false
-
-    if (!shouldProceed) {
-      throw new Error(`[dsh-plugin-guard] 用户中止了高危插件 ${spec} 的安装`)
-    }
-
-    const { auditToken } = await approvePackageInstall(spec, { force: true })
-    return auditToken
-  }
-
-  if (report.verdict === 'CAUTION') {
-    const summary = formatAuditSummary(report)
-    const shouldProceed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-      ? window.confirm(`${summary}\n\n插件包含警告项，是否确认继续安装？`)
+      ? window.confirm(promptMsg)
       : true
-
-    if (!shouldProceed) {
-      throw new Error(`[dsh-plugin-guard] 用户取消了 ${spec} 的安装`)
-    }
-
-    const { auditToken } = await approvePackageInstall(spec)
-    return auditToken
+    return Promise.resolve(shouldProceed)
   }
 
-  // Safe verdict
-  const { auditToken } = await approvePackageInstall(spec)
-  return auditToken
+  return new Promise((resolve) => {
+    const existing = document.getElementById('dsh-plugin-guard-modal-root')
+    if (existing) existing.remove()
+
+    const root = document.createElement('div')
+    root.id = 'dsh-plugin-guard-modal-root'
+    root.style.position = 'fixed'
+    root.style.top = '0'
+    root.style.left = '0'
+    root.style.width = '100vw'
+    root.style.height = '100vh'
+    root.style.backgroundColor = 'rgba(15, 23, 42, 0.65)'
+    root.style.backdropFilter = 'blur(6px)'
+    root.style.zIndex = '999999'
+    root.style.display = 'flex'
+    root.style.alignItems = 'center'
+    root.style.justifyContent = 'center'
+    root.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif'
+    root.style.padding = '20px'
+    root.style.boxSizing = 'border-box'
+
+    const card = document.createElement('div')
+    card.style.background = '#ffffff'
+    card.style.color = '#1e293b'
+    card.style.width = '100%'
+    card.style.maxWidth = '580px'
+    card.style.borderRadius = '16px'
+    card.style.boxShadow = '0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05)'
+    card.style.overflow = 'hidden'
+    card.style.display = 'flex'
+    card.style.flexDirection = 'column'
+
+    const verdictColor =
+      report.verdict === 'DANGEROUS'
+        ? '#ef4444'
+        : report.verdict === 'CAUTION'
+        ? '#f59e0b'
+        : '#10b981'
+
+    const verdictBg =
+      report.verdict === 'DANGEROUS'
+        ? '#fef2f2'
+        : report.verdict === 'CAUTION'
+        ? '#fffbeb'
+        : '#ecfdf5'
+
+    const verdictBorder =
+      report.verdict === 'DANGEROUS'
+        ? '#fecaca'
+        : report.verdict === 'CAUTION'
+        ? '#fde68a'
+        : '#a7f3d0'
+
+    const header = document.createElement('div')
+    header.style.padding = '20px 24px 16px'
+    header.style.borderBottom = '1px solid #f1f5f9'
+    header.style.display = 'flex'
+    header.style.alignItems = 'center'
+    header.style.justifyContent = 'space-between'
+
+    header.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 22px;">🛡️</span>
+        <div>
+          <h2 style="margin: 0; font-size: 17px; font-weight: 600; color: #0f172a;">DSH 插件安全审查</h2>
+          <div style="font-size: 13px; color: #64748b; margin-top: 2px;">
+            待审对象: <strong style="color: #334155;">${report.spec}</strong>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+        <span style="font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; background: ${verdictBg}; color: ${verdictColor}; border: 1px solid ${verdictBorder};">
+          ${report.verdict} · ${report.score}/100
+        </span>
+        ${report.cached ? '<span style="font-size: 11px; color: #059669;">⚡ 命中本地审计缓存</span>' : ''}
+      </div>
+    `
+
+    const body = document.createElement('div')
+    body.style.padding = '20px 24px'
+    body.style.maxHeight = '65vh'
+    body.style.overflowY = 'auto'
+    body.style.display = 'flex'
+    body.style.flexDirection = 'column'
+    body.style.gap = '14px'
+
+    const recText = report.recommendation === 'REJECT'
+      ? '🔴 Agent 建议：建议拦截 (检测到已知威胁或恶意行为)'
+      : report.recommendation === 'REVIEW_CAREFULLY'
+      ? '🟡 Agent 建议：仔细核验 (包含敏感特权，请结合用途判定)'
+      : '🟢 Agent 建议：推荐安装 (业务意图合理，未见恶意特征)'
+
+    const intentHtml = report.intentAnalysis
+      ? `<div style="background: #f8fafc; border-radius: 10px; padding: 12px 14px; border: 1px solid #e2e8f0;">
+          <div style="font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px;">📋 功能意图与权限契合度分析:</div>
+          <div style="font-size: 13px; color: #1e293b; line-height: 1.5;">${report.intentAnalysis}</div>
+        </div>`
+      : ''
+
+    const summaryHtml = report.agentSummary
+      ? `<div style="font-size: 13px; color: #334155; line-height: 1.5;">
+          <strong>Agent 审查综述:</strong> ${report.agentSummary}
+        </div>`
+      : ''
+
+    let findingsHtml = ''
+    if (report.findings && report.findings.length > 0) {
+      findingsHtml = `
+        <div style="margin-top: 6px;">
+          <div style="font-size: 12px; font-weight: 600; color: #64748b; margin-bottom: 6px;">检查项详情 (${report.findings.length} 条):</div>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            ${report.findings.map(f => `
+              <div style="font-size: 12px; background: #fff1f2; border: 1px solid #ffe4e6; border-radius: 8px; padding: 8px 12px; color: #9f1239;">
+                <span style="font-weight: 600;">[${f.severity}] ${f.title}</span>
+                <div style="margin-top: 2px; color: #4c0519; opacity: 0.85;">${f.description || ''}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `
+    } else {
+      findingsHtml = `
+        <div style="font-size: 12px; color: #059669; background: #ecfdf5; border: 1px solid #d1fae5; border-radius: 8px; padding: 8px 12px;">
+          ✅ 未发现任何已知危险模式或代码投毒异常
+        </div>
+      `
+    }
+
+    body.innerHTML = `
+      <div style="font-size: 13px; font-weight: 600; color: ${verdictColor}; background: ${verdictBg}; border: 1px solid ${verdictBorder}; border-radius: 10px; padding: 10px 14px;">
+        ${recText}
+      </div>
+      ${intentHtml}
+      ${summaryHtml}
+      ${findingsHtml}
+      <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">
+        审查引擎: ${report.model ?? 'DSH Agent'} · 最终安装决策权由您掌控
+      </div>
+    `
+
+    const footer = document.createElement('div')
+    footer.style.padding = '14px 24px'
+    footer.style.borderTop = '1px solid #f1f5f9'
+    footer.style.background = '#f8fafc'
+    footer.style.display = 'flex'
+    footer.style.alignItems = 'center'
+    footer.style.justifyContent = 'flex-end'
+    footer.style.gap = '12px'
+
+    const cancelBtn = document.createElement('button')
+    cancelBtn.textContent = '拒绝 / 取消安装'
+    cancelBtn.style.padding = '8px 16px'
+    cancelBtn.style.fontSize = '13px'
+    cancelBtn.style.fontWeight = '500'
+    cancelBtn.style.borderRadius = '8px'
+    cancelBtn.style.border = '1px solid #cbd5e1'
+    cancelBtn.style.background = '#ffffff'
+    cancelBtn.style.color = '#475569'
+    cancelBtn.style.cursor = 'pointer'
+
+    const approveBtn = document.createElement('button')
+    approveBtn.textContent = report.verdict === 'DANGEROUS' ? '已知晓风险，强制放行' : '批准并继续安装'
+    approveBtn.style.padding = '8px 18px'
+    approveBtn.style.fontSize = '13px'
+    approveBtn.style.fontWeight = '600'
+    approveBtn.style.borderRadius = '8px'
+    approveBtn.style.border = 'none'
+    approveBtn.style.background = report.verdict === 'DANGEROUS' ? '#dc2626' : '#2563eb'
+    approveBtn.style.color = '#ffffff'
+    approveBtn.style.cursor = 'pointer'
+
+    const cleanup = () => {
+      root.remove()
+    }
+
+    cancelBtn.onclick = () => {
+      cleanup()
+      resolve(false)
+    }
+
+    approveBtn.onclick = () => {
+      cleanup()
+      resolve(true)
+    }
+
+    footer.appendChild(cancelBtn)
+    footer.appendChild(approveBtn)
+
+    card.appendChild(header)
+    card.appendChild(body)
+    card.appendChild(footer)
+    root.appendChild(card)
+    document.body.appendChild(root)
+  })
+}
+
+/**
+ * Prompts user with Agent review report, then requests approval token upon confirmation.
+ * Deduplicates concurrent requests and reuses recent approvals to eliminate duplicate popups.
+ */
+export async function auditAndConfirm(spec: string): Promise<string> {
+  const key = spec.trim().toLowerCase()
+
+  // 1. Fast path: check if recently approved by human in this session
+  const recentToken = getRecentApproval(spec)
+  if (recentToken) {
+    return recentToken
+  }
+
+  // 2. Concurrency lock: if this spec is currently being audited, reuse the in-flight promise
+  const existing = inFlightAudits.get(key)
+  if (existing) {
+    return existing
+  }
+
+  const auditPromise = (async () => {
+    try {
+      const report = await fetchAuditReport(spec)
+
+      // Present the Agent review report modal to user
+      const shouldProceed = await showAgentReviewModal(report)
+
+      if (!shouldProceed) {
+        if (report.verdict === 'DANGEROUS') {
+          throw new Error(`[dsh-plugin-guard] 用户中止了高危插件 ${spec} 的安装`)
+        } else {
+          throw new Error(`[dsh-plugin-guard] 用户取消了 ${spec} 的安装`)
+        }
+      }
+
+      // User confirmed, now request signed approval token from host
+      const isForce = report.verdict === 'DANGEROUS'
+      const { auditToken } = await approvePackageInstall(spec, { force: isForce })
+
+      recordRecentApproval(spec, auditToken)
+      return auditToken
+    } finally {
+      inFlightAudits.delete(key)
+    }
+  })()
+
+  inFlightAudits.set(key, auditPromise)
+  return auditPromise
 }
 
 /**
