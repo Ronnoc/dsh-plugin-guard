@@ -21,6 +21,9 @@ interface ApprovedRecord {
   tarballSha256: string
   approvedAt: number
   expiresAt: number
+  force?: boolean
+  usedCount?: number
+  lastUsedAt?: number
 }
 
 export class GuardInterceptor {
@@ -29,7 +32,9 @@ export class GuardInterceptor {
   private cacheManager: AuditCacheManager
   private cache = new Map<string, StagedCacheEntry>() // normalizedSpec -> StagedCacheEntry
   private approvals = new Map<string, ApprovedRecord>() // normalizedKey -> ApprovedRecord
+  private installGrants = new Map<string, number>() // normalizedKey -> expiresAt
   private hostContext?: any
+  private disposed = false
 
   constructor(config: GuardConfig = {}, hostContext?: any) {
     this.config = config
@@ -50,6 +55,13 @@ export class GuardInterceptor {
    */
   setHostContext(ctx: any): void {
     this.hostContext = ctx
+  }
+
+  /**
+   * Returns whether this interceptor has been disposed/unplugged.
+   */
+  isDisposed(): boolean {
+    return this.disposed
   }
 
   /**
@@ -220,37 +232,50 @@ export class GuardInterceptor {
     report.auditToken = token
 
     // Record approval in memory for host-level verification
+    const cleanSpec = spec.split('?')[0].trim()
+    const normSpec = cleanSpec.toLowerCase()
+    const normPkg = (report.packageName || cleanSpec).trim().toLowerCase()
     const record: ApprovedRecord = {
-      spec,
+      spec: cleanSpec,
       packageName: report.packageName,
       version: report.version,
       tarballSha256: report.tarballSha256,
       approvedAt: Date.now(),
       expiresAt: Date.now() + ttl,
+      force: options.force,
     }
 
-    const normSpec = spec.trim().toLowerCase()
-    const normPkg = (report.packageName || spec).trim().toLowerCase()
     this.approvals.set(normSpec, record)
     this.approvals.set(normPkg, record)
     if (report.version) {
       this.approvals.set(`${normPkg}@${report.version}`.toLowerCase(), record)
     }
+    this.approvals.set(`${normPkg}@latest`.toLowerCase(), record)
+
+    if (report.resolvedSpec) {
+      this.approvals.set(report.resolvedSpec.split('?')[0].trim().toLowerCase(), record)
+    }
+    if (report.originalSpec) {
+      this.approvals.set(report.originalSpec.split('?')[0].trim().toLowerCase(), record)
+    }
 
     return { auditToken: token, report }
   }
 
-  private getApprovalLookupKeys(spec: string): string[] {
-    const trimmed = spec.trim().toLowerCase()
-    const keys = [trimmed]
+  private getApprovalLookupKeys(rawSpec: string): string[] {
+    const clean = rawSpec.split('?')[0].trim().toLowerCase()
+    const keys = new Set<string>([clean])
 
     // Handle package@version
-    const lastAt = trimmed.lastIndexOf('@')
+    const lastAt = clean.lastIndexOf('@')
     if (lastAt > 0) {
-      const name = trimmed.slice(0, lastAt)
-      keys.push(name)
+      const name = clean.slice(0, lastAt)
+      keys.add(name)
+      keys.add(`${name}@latest`)
+    } else {
+      keys.add(`${clean}@latest`)
     }
-    return keys
+    return Array.from(keys)
   }
 
   /**
@@ -269,20 +294,52 @@ export class GuardInterceptor {
   }
 
   /**
+   * Grant an active installation window for a spec (e.g. 60 seconds) so multi-step installs
+   * (e.g. pnpm already-installed -> removeBundle -> re-install, or route gate -> host installBundle) succeed.
+   */
+  grantInstallWindow(rawSpec: string, durationMs = 60_000): void {
+    const now = Date.now()
+    const cleanLower = rawSpec.split('?')[0].trim().toLowerCase()
+    this.installGrants.set(cleanLower, now + durationMs)
+    const atIdx = cleanLower.lastIndexOf('@')
+    if (atIdx > 0) {
+      this.installGrants.set(cleanLower.slice(0, atIdx), now + durationMs)
+    }
+  }
+
+  /**
+   * Check if a spec has an active installation session grant.
+   */
+  hasInstallGrant(rawSpec: string): boolean {
+    const now = Date.now()
+    const cleanLower = rawSpec.split('?')[0].trim().toLowerCase()
+    const exp = this.installGrants.get(cleanLower)
+    if (exp && now <= exp) return true
+    const atIdx = cleanLower.lastIndexOf('@')
+    if (atIdx > 0) {
+      const pkgExp = this.installGrants.get(cleanLower.slice(0, atIdx))
+      if (pkgExp && now <= pkgExp) return true
+    }
+    return false
+  }
+
+  /**
    * Consume an approval (single-use).
    */
   consumeApproval(spec: string): boolean {
     const now = Date.now()
-    const keys = this.getApprovalLookupKeys(spec)
+    const cleanSpec = spec.split('?')[0].trim()
+    const keys = this.getApprovalLookupKeys(cleanSpec)
     for (const k of keys) {
       const app = this.approvals.get(k)
       if (app && now <= app.expiresAt) {
-        // Delete all associated keys
+        // Delete all associated keys for single-use approval
         const relatedKeys = this.getApprovalLookupKeys(app.spec)
         relatedKeys.push(app.packageName.toLowerCase())
         if (app.version) {
           relatedKeys.push(`${app.packageName}@${app.version}`.toLowerCase())
         }
+        relatedKeys.push(`${app.packageName}@latest`.toLowerCase())
         for (const rk of relatedKeys) {
           this.approvals.delete(rk)
         }
@@ -296,23 +353,31 @@ export class GuardInterceptor {
    * Validates whether an incoming install request should be permitted.
    */
   validateInstallRequest(
-    spec: string,
+    rawSpec: string,
     auditToken?: string,
+    options?: { force?: boolean },
   ): { allowed: boolean; reason?: string } {
-    // If scanning is disabled, allow all
-    if (this.config.scanOnInstall === false) {
+    const cleanSpec = rawSpec.split('?')[0].trim()
+
+    // If interceptor is disposed, scanning is disabled, explicit force flag passed, or spec has active install grant, allow
+    if (
+      this.disposed ||
+      this.config.scanOnInstall === false ||
+      options?.force ||
+      this.hasInstallGrant(cleanSpec)
+    ) {
       return { allowed: true }
     }
 
     // 1. If explicit auditToken provided, validate via tokenManager
     if (auditToken) {
-      const key = spec.trim().toLowerCase()
+      const key = cleanSpec.toLowerCase()
       const cached = this.cache.get(key)
       const expectedSha256 = cached?.session.tarballSha256
 
-      const result = this.tokenManager.consumeToken(auditToken, spec, expectedSha256)
+      const result = this.tokenManager.consumeToken(auditToken, cleanSpec, expectedSha256)
       if (result.valid) {
-        this.consumeApproval(spec)
+        this.consumeApproval(cleanSpec)
         return { allowed: true }
       }
       return {
@@ -322,7 +387,7 @@ export class GuardInterceptor {
     }
 
     // 2. If no token provided, check if spec was recently approved in this session
-    if (this.consumeApproval(spec)) {
+    if (this.consumeApproval(cleanSpec)) {
       return { allowed: true }
     }
 
@@ -336,10 +401,12 @@ export class GuardInterceptor {
    * Dispose all active stage folders.
    */
   async dispose(): Promise<void> {
+    this.disposed = true
     for (const entry of this.cache.values()) {
       await entry.session.cleanup().catch(() => {})
     }
     this.cache.clear()
     this.approvals.clear()
+    this.installGrants.clear()
   }
 }

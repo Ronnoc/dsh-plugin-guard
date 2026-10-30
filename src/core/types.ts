@@ -46,8 +46,12 @@ export interface RequestedPermissions {
 }
 
 export interface AuditReport {
-  /** The requested install spec (e.g. 'foo@1.0.0') */
+  /** The requested install spec (e.g. 'foo@1.0.0' or 'amlyczz--dsh-agy-link') */
   spec: string
+  /** The original install spec before resolution */
+  originalSpec?: string
+  /** The resolved npm or GitHub spec used for downloading */
+  resolvedSpec?: string
   /** Package name declared in package.json */
   packageName: string
   /** Package version */

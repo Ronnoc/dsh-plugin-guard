@@ -462,6 +462,11 @@ export async function auditAndConfirm(spec: string): Promise<string> {
       const { auditToken } = await approvePackageInstall(spec, { force: isForce })
 
       recordRecentApproval(spec, auditToken)
+      const clean = spec.split('?')[0].trim().toLowerCase()
+      recordRecentApproval(clean, auditToken)
+      if (report.packageName && report.version) {
+        recordRecentApproval(`${report.packageName.toLowerCase()}@${report.version}`, auditToken)
+      }
       return auditToken
     } finally {
       inFlightAudits.delete(key)
@@ -1821,7 +1826,9 @@ export function patchFetch(): boolean {
               ? `${bodyObj.id}@${bodyObj.version}`
               : bodyObj.id
           } else if (action === 'upgrade' && typeof bodyObj.pkg === 'string') {
-            targetSpec = bodyObj.pkg
+            targetSpec = typeof bodyObj.version === 'string' && bodyObj.version
+              ? `${bodyObj.pkg}@${bodyObj.version}`
+              : bodyObj.pkg
           } else if (action === 'self-upgrade') {
             targetSpec = 'dsh-m'
           }
@@ -1833,7 +1840,9 @@ export function patchFetch(): boolean {
             // Attach auditToken to headers and body
             const headers = new Headers(init.headers || {})
             headers.set('x-audit-token', auditToken)
+            headers.set('x-guard-force', 'true')
             bodyObj.auditToken = auditToken
+            bodyObj.force = true
 
             const newInit: RequestInit = {
               ...init,
@@ -1868,7 +1877,9 @@ export function patchFetch(): boolean {
           const auditToken = await auditAndConfirm(spec)
           const headers = new Headers(init.headers || {})
           headers.set('x-audit-token', auditToken)
+          headers.set('x-guard-force', 'true')
           bodyObj.auditToken = auditToken
+          bodyObj.force = true
           return origFetch(input, {
             ...init,
             headers,

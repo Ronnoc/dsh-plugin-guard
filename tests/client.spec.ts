@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   formatAuditSummary,
   apply,
   name,
   inject,
   patchFetch,
+  clearRecentApprovals,
 } from '../src/client.js'
 import type { AuditReport } from '../src/core/types.js'
 import { readFileSync, existsSync } from 'node:fs'
@@ -12,6 +13,9 @@ import { resolve } from 'node:path'
 import { execSync } from 'node:child_process'
 
 describe('client module', () => {
+  beforeEach(() => {
+    clearRecentApprovals()
+  })
   it('has expected metadata', () => {
     expect(name).toBe('dsh-plugin-guard')
     expect(Array.isArray(inject)).toBe(true)

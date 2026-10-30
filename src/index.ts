@@ -56,6 +56,22 @@ export interface PluginContext {
   on?(event: string, listener: (...args: unknown[]) => void): void
 }
 
+function parseSpecAndQuery(rawSpec: string): {
+  cleanSpec: string
+  tokenFromQuery?: string
+  forceFromQuery?: boolean
+} {
+  const qIdx = rawSpec.indexOf('?')
+  if (qIdx === -1) {
+    return { cleanSpec: rawSpec.trim() }
+  }
+  const cleanSpec = rawSpec.slice(0, qIdx).trim()
+  const searchParams = new URLSearchParams(rawSpec.slice(qIdx + 1))
+  const tokenFromQuery = searchParams.get('auditToken') || undefined
+  const forceFromQuery = searchParams.get('force') === 'true'
+  return { cleanSpec, tokenFromQuery, forceFromQuery }
+}
+
 /**
  * Monkey-patches host-side pluginManager.installBundle to enforce security audits.
  */
@@ -69,41 +85,63 @@ export function hookHostPluginManager(
   const origInstallBundle = pm.installBundle
   if (typeof origInstallBundle !== 'function') return false
 
-  pm.installBundle = async function (spec: string, options?: any) {
-    const config = interceptor.getConfig()
-    if (config.scanOnInstall !== false) {
-      const auditToken =
-        typeof options === 'object' && options !== null ? options.auditToken : undefined
+  pm.__origInstallBundle = origInstallBundle
 
-      const validation = interceptor.validateInstallRequest(spec, auditToken)
-
-      if (!validation.allowed) {
-        logger?.warn?.(
-          `[dsh-plugin-guard] 宿主插件安装请求未带放行凭证，执行后备自动安全审计: spec=${spec}`,
-        )
-        const report = await interceptor.audit(spec)
-
-        if (config.strictMode && report.verdict === 'DANGEROUS') {
-          throw new Error(
-            `[dsh-plugin-guard] 严格模式阻断：插件 ${spec} 存在高危安全漏洞 (评级: ${report.verdict}, 得分: ${report.score}/100)，禁止安装。`,
-          )
-        }
-
-        if (report.verdict === 'DANGEROUS') {
-          throw new Error(
-            `[dsh-plugin-guard] 安全拦截：插件 ${spec} 评估为高危 (评级: ${report.verdict}, 得分: ${report.score}/100)，未获放行授权凭证。`,
-          )
-        }
-
-        logger?.info?.(
-          `[dsh-plugin-guard] 插件 ${spec} 静态审计评估通过 (评级: ${report.verdict})，放行安装。`,
-        )
-      } else {
-        logger?.info?.(`[dsh-plugin-guard] 插件 ${spec} 凭借已授权凭证/预审记录放行安装。`)
-      }
+  pm.installBundle = async function (rawSpec: string, options?: any) {
+    // Hot unplug: if guard is disposed, immediately bypass
+    if (interceptor.isDisposed()) {
+      return origInstallBundle.call(this, rawSpec, options)
     }
 
-    return origInstallBundle.call(this, spec, options)
+    const config = interceptor.getConfig()
+    if (config.scanOnInstall !== false) {
+      const { cleanSpec, tokenFromQuery, forceFromQuery } = parseSpecAndQuery(rawSpec)
+      const isForce = Boolean(options?.force || options?.bypassGuard || forceFromQuery)
+      const auditToken = options?.auditToken || tokenFromQuery
+
+      const validation = interceptor.validateInstallRequest(cleanSpec, auditToken, { force: isForce })
+
+      if (!validation.allowed && !isForce) {
+        if (interceptor.isApproved(cleanSpec)) {
+          interceptor.grantInstallWindow(cleanSpec)
+          logger?.info?.(
+            `[dsh-plugin-guard] 插件 ${cleanSpec} 凭借已授权凭证/预审记录放行安装。`,
+          )
+        } else {
+          logger?.warn?.(
+            `[dsh-plugin-guard] 宿主插件安装请求未带放行凭证，执行后备自动安全审计: spec=${cleanSpec}`,
+          )
+          const report = await interceptor.audit(cleanSpec)
+
+          if (config.strictMode && report.verdict === 'DANGEROUS') {
+            throw new Error(
+              `[dsh-plugin-guard] 严格模式阻断：插件 ${cleanSpec} 存在高危安全漏洞 (评级: ${report.verdict}, 得分: ${report.score}/100)，禁止安装。如需在已知风险下强制安装，请在确认放行后重试或使用强制放行模式。`,
+            )
+          }
+
+          if (report.verdict === 'DANGEROUS') {
+            logger?.warn?.(
+              `[dsh-plugin-guard] 安全提示：插件 ${cleanSpec} 评估为高危 (评级: ${report.verdict}, 得分: ${report.score}/100)，非严格模式放行安装。`,
+            )
+          } else {
+            logger?.info?.(
+              `[dsh-plugin-guard] 插件 ${cleanSpec} 静态审计评估通过 (评级: ${report.verdict})，放行安装。`,
+            )
+          }
+        }
+      } else {
+        interceptor.grantInstallWindow(cleanSpec)
+        if (isForce) {
+          logger?.info?.(`[dsh-plugin-guard] 插件 ${cleanSpec} 检测到强制放行标记，放行安装。`)
+        } else {
+          logger?.info?.(`[dsh-plugin-guard] 插件 ${cleanSpec} 凭借已授权凭证/预审记录放行安装。`)
+        }
+      }
+
+      return origInstallBundle.call(this, cleanSpec, options)
+    }
+
+    return origInstallBundle.call(this, rawSpec, options)
   }
 
   pm.__pluginGuardHostPatched = true

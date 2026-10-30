@@ -236,4 +236,207 @@ describe('GuardInterceptor', () => {
     expect(res).toEqual({ installed: true })
     expect(rawInstallBundle).toHaveBeenCalledWith('safe-pkg@1.0.0', undefined)
   })
+
+  it('allows manual user confirmation of dangerous packages when approved with force', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      strictMode: true,
+    })
+
+    const mockDangerousReport: AuditReport = {
+      spec: 'dsh-agy-link@0.4.96',
+      packageName: 'dsh-agy-link',
+      version: '0.4.96',
+      tarballSha256: '9879772bc242e0697d8d78964a79fd8d5b5c77a05534fd964c98777e93cfe27c',
+      verdict: 'DANGEROUS',
+      score: 0,
+      findings: [
+        {
+          ruleId: 'SEC-CRED-001',
+          category: 'credentials',
+          severity: 'CRITICAL',
+          title: 'Direct access to ~/.dsh/agy-accounts',
+          description: 'test',
+          file: 'dist/index.js',
+        },
+      ],
+      permissions: { network: [], filesystem: [], subprocesses: true, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockDangerousReport)
+
+    const rawInstallBundle = vi.fn().mockResolvedValue({ installed: true })
+    const pm = { installBundle: rawInstallBundle }
+    hookHostPluginManager(pm, interceptor)
+
+    // User explicitly manually confirmed ("已知晓风险，强制放行")
+    await interceptor.approve('dsh-agy-link', { force: true })
+
+    // Host installer invokes pm.installBundle with target version
+    const res = await pm.installBundle('dsh-agy-link@0.4.96')
+    expect(res).toEqual({ installed: true })
+    expect(rawInstallBundle).toHaveBeenCalledWith('dsh-agy-link@0.4.96', undefined)
+  })
+
+  it('permits two-step upgrade without losing approval grant', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      strictMode: true,
+    })
+
+    const mockReport: AuditReport = {
+      spec: 'dsh-agy-link@0.4.96',
+      packageName: 'dsh-agy-link',
+      version: '0.4.96',
+      tarballSha256: '9879772bc242e0697d8d78964a79fd8d5b5c77a05534fd964c98777e93cfe27c',
+      verdict: 'DANGEROUS',
+      score: 0,
+      findings: [
+        {
+          ruleId: 'SEC-CRED-001',
+          category: 'credentials',
+          severity: 'CRITICAL',
+          title: 'Direct access to ~/.dsh/agy-accounts',
+          description: 'test',
+          file: 'dist/index.js',
+        },
+      ],
+      permissions: { network: [], filesystem: [], subprocesses: true, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockReport)
+
+    let callCount = 0
+    const rawInstallBundle = vi.fn().mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        // First leg fails with already-installed in dsh-m
+        return { application: 'failed', error: { code: 'already-installed' } }
+      }
+      return { application: 'applied' }
+    })
+
+    const pm = { installBundle: rawInstallBundle }
+    hookHostPluginManager(pm, interceptor)
+
+    // User approves with force
+    await interceptor.approve('dsh-agy-link@0.4.96', { force: true })
+
+    // Leg 1: First install attempt
+    const res1 = await pm.installBundle('dsh-agy-link@0.4.96')
+    expect(res1).toEqual({ application: 'failed', error: { code: 'already-installed' } })
+
+    // Leg 2: Second install attempt after removeBundle in silent two-step upgrade
+    // Must NOT be blocked by strictMode!
+    const res2 = await pm.installBundle('dsh-agy-link@0.4.96')
+    expect(res2).toEqual({ application: 'applied' })
+  })
+
+  it('respects options.force and options.bypassGuard for manual installations', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      strictMode: true,
+    })
+
+    const mockDangerousReport: AuditReport = {
+      spec: 'custom-tool@1.0.0',
+      packageName: 'custom-tool',
+      version: '1.0.0',
+      tarballSha256: 'mock123',
+      verdict: 'DANGEROUS',
+      score: 10,
+      findings: [
+        {
+          ruleId: 'SEC-EXEC-001',
+          category: 'execution',
+          severity: 'CRITICAL',
+          title: 'Command exec',
+          description: 'test',
+          file: 'index.js',
+        },
+      ],
+      permissions: { network: [], filesystem: [], subprocesses: true, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockDangerousReport)
+
+    const rawInstallBundle = vi.fn().mockResolvedValue({ installed: true })
+    const pm = { installBundle: rawInstallBundle }
+    hookHostPluginManager(pm, interceptor)
+
+    // Direct manual install with force: true
+    const res = await pm.installBundle('custom-tool@1.0.0', { force: true })
+    expect(res).toEqual({ installed: true })
+    expect(rawInstallBundle).toHaveBeenCalledWith('custom-tool@1.0.0', { force: true })
+  })
+
+  it('permits dangerous installation with warning when strictMode is disabled', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      strictMode: false,
+    })
+
+    const mockDangerousReport: AuditReport = {
+      spec: 'non-strict-pkg@1.0.0',
+      packageName: 'non-strict-pkg',
+      version: '1.0.0',
+      tarballSha256: 'mock456',
+      verdict: 'DANGEROUS',
+      score: 10,
+      findings: [
+        {
+          ruleId: 'SEC-EXEC-001',
+          category: 'execution',
+          severity: 'CRITICAL',
+          title: 'Command exec',
+          description: 'test',
+          file: 'index.js',
+        },
+      ],
+      permissions: { network: [], filesystem: [], subprocesses: true, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockDangerousReport)
+
+    const rawInstallBundle = vi.fn().mockResolvedValue({ installed: true })
+    const pm = { installBundle: rawInstallBundle }
+    hookHostPluginManager(pm, interceptor)
+
+    const res = await pm.installBundle('non-strict-pkg@1.0.0')
+    expect(res).toEqual({ installed: true })
+  })
+
+  it('strips query parameters from spec before passing to raw installBundle', async () => {
+    const interceptor = new GuardInterceptor({
+      scanOnInstall: true,
+      strictMode: true,
+    })
+
+    const mockSafeReport: AuditReport = {
+      spec: 'safe-pkg@1.0.0',
+      packageName: 'safe-pkg',
+      version: '1.0.0',
+      tarballSha256: 'good123',
+      verdict: 'SAFE',
+      score: 100,
+      findings: [],
+      permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    vi.spyOn(interceptor, 'audit').mockResolvedValue(mockSafeReport)
+    const { auditToken } = await interceptor.approve('safe-pkg@1.0.0')
+
+    const rawInstallBundle = vi.fn().mockResolvedValue({ installed: true })
+    const pm = { installBundle: rawInstallBundle }
+    hookHostPluginManager(pm, interceptor)
+
+    // Spec passed with query param from client patchInstall
+    await pm.installBundle(`safe-pkg@1.0.0?auditToken=${auditToken}`)
+    expect(rawInstallBundle).toHaveBeenCalledWith('safe-pkg@1.0.0', undefined)
+  })
 })

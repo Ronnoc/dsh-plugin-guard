@@ -16,6 +16,7 @@ import type { AuditOptions, AuditReport, GuardConfig } from './types.js'
 import { auditPackageDirectory } from './scanner.js'
 import { auditPackageWithAgent } from './agent-reviewer.js'
 import type { AuditCacheManager } from './cache.js'
+import { resolveInstallSpec } from './resolver.js'
 
 const pExecFile = promisify(execFile)
 
@@ -66,12 +67,16 @@ export async function stageAndAuditPackage(
 
     const scanStart = Date.now()
 
-    // 1. Download tarball with --ignore-scripts to prevent any lifecycle script execution
+    // 1. Resolve marketplace spec/ID (e.g. 'amlyczz--dsh-agy-link' -> 'dsh-agy-link')
+    const specInfo = await resolveInstallSpec(trimmedSpec)
+    const downloadSpec = specInfo.resolvedSpec
+
+    // 2. Download tarball with --ignore-scripts to prevent any lifecycle script execution
     // npm pack outputs the filename to stdout
     const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
     const { stdout } = await pExecFile(
       npmCmd,
-      ['pack', trimmedSpec, '--pack-destination', stageDir, '--ignore-scripts'],
+      ['pack', downloadSpec, '--pack-destination', stageDir, '--ignore-scripts'],
       {
         windowsHide: true,
         shell: process.platform === 'win32',
@@ -151,6 +156,11 @@ export async function stageAndAuditPackage(
         hostContext: options?.hostContext,
       })
     }
+    report.originalSpec = trimmedSpec
+    report.resolvedSpec = downloadSpec
+    if (!report.packageName || report.packageName === trimmedSpec) {
+      report.packageName = specInfo.packageName
+    }
     const durationMs = Date.now() - scanStart
 
     // 6. Save audit report to persistent local disk cache
@@ -165,12 +175,24 @@ export async function stageAndAuditPackage(
         report,
         durationMs,
       )
-      if (spec !== report.packageName) {
+      if (trimmedSpec !== report.packageName) {
         await cacheManager.set(
           {
             model,
             pluginGuardVersion: GUARD_VERSION,
-            plugin: spec,
+            plugin: trimmedSpec,
+            tarballSha256,
+          },
+          report,
+          durationMs,
+        )
+      }
+      if (downloadSpec !== report.packageName && downloadSpec !== trimmedSpec) {
+        await cacheManager.set(
+          {
+            model,
+            pluginGuardVersion: GUARD_VERSION,
+            plugin: downloadSpec,
             tarballSha256,
           },
           report,

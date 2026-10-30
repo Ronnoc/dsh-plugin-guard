@@ -172,17 +172,18 @@ export async function handleGuardRequest(
     req.method === 'POST'
   ) {
     const body = (await readJsonBody(req).catch(() => null)) as Record<string, unknown> | null
-    const spec = typeof body?.['spec'] === 'string' ? body['spec'] : undefined
+    const rawSpec = typeof body?.['spec'] === 'string' ? body['spec'] : undefined
     const force = Boolean(body?.['force'])
     const model = typeof body?.['model'] === 'string' ? body['model'] : undefined
 
-    if (!spec || !spec.trim()) {
+    if (!rawSpec || !rawSpec.trim()) {
       writeJson(res, 400, { error: '缺少 spec 参数' })
       return true
     }
+    const cleanSpec = rawSpec.split('?')[0].trim()
 
     try {
-      const result = await interceptor.approve(spec, { force, model })
+      const result = await interceptor.approve(cleanSpec, { force, model })
       writeJson(res, 200, { ok: true, ...result })
     } catch (err) {
       writeJson(res, 403, {
@@ -260,24 +261,27 @@ export async function handleGuardRequest(
       // Ignored
     }
 
-    const spec = typeof body?.['spec'] === 'string' ? body['spec'] : undefined
+    const rawSpec = typeof body?.['spec'] === 'string' ? body['spec'] : undefined
+    const isForce = Boolean(body?.['force'] || req.headers['x-guard-force'] === 'true')
     const auditToken =
       (typeof body?.['auditToken'] === 'string' ? body['auditToken'] : undefined) ||
       (req.headers['x-audit-token'] as string | undefined) ||
       parsed.searchParams.get('auditToken') ||
       undefined
 
-    if (spec) {
-      const check = interceptor.validateInstallRequest(spec, auditToken)
+    if (rawSpec) {
+      const cleanSpec = rawSpec.split('?')[0].trim()
+      const check = interceptor.validateInstallRequest(cleanSpec, auditToken, { force: isForce })
       if (!check.allowed) {
         writeJson(res, 403, {
           ok: false,
           error: check.reason,
           requireAudit: true,
-          spec,
+          spec: cleanSpec,
         })
         return true
       }
+      interceptor.grantInstallWindow(cleanSpec)
     }
 
     // If allowed, let next middleware handle the original install
