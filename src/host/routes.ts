@@ -1,49 +1,62 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX } from '../core/constants.js'
+
+export { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX }
+import type { GuardConfig } from '../core/types.js'
+import type { GuardInterceptor } from './interceptor.js'
+
 /**
  * DSH Plugin Guard: Host HTTP Route Handlers & Interception Middleware
  * Intercepts /api/plugin-manager/install and exposes /api/plugin-guard audit APIs.
  * @module dsh-plugin-guard/host/routes
  */
 
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import { URL } from 'node:url'
-import type { GuardInterceptor } from './interceptor.js'
-import { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX } from '../core/constants.js'
-
-export { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX }
-
-export const INTERCEPT_INSTALL_PATHS = new Set([
+const INTERCEPT_INSTALL_PATHS = new Set([
   '/api/plugin-manager/install',
   '/gateway/install',
-  '/api/plugin-manager/update',
-  '/gateway/update',
+  '/api/plugins/install',
 ])
 
-export async function readJsonBody<T = Record<string, unknown>>(
-  req: IncomingMessage,
-  maxBytes: number = 64 * 1024,
-): Promise<T | null> {
+function writeJson(
+  res: ServerResponse,
+  statusCode: number,
+  data: Record<string, unknown>,
+): void {
+  const payload = Buffer.from(JSON.stringify(data), 'utf-8')
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': payload.length,
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-audit-token',
+  })
+  res.end(payload)
+}
+
+function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    let size = 0
     const chunks: Buffer[] = []
+    let size = 0
 
     req.on('data', (chunk: Buffer) => {
-      size += chunk.length
-      if (size > maxBytes) {
-        req.destroy()
-        reject(new Error(`Payload exceeds maximum allowed size of ${maxBytes} bytes`))
-        return
-      }
       chunks.push(chunk)
+      size += chunk.length
+      if (size > 1024 * 1024) {
+        reject(new Error('Payload too large'))
+      }
     })
 
     req.on('end', () => {
-      if (chunks.length === 0) {
-        resolve(null)
-        return
-      }
       try {
-        const text = Buffer.concat(chunks).toString('utf-8')
-        resolve(JSON.parse(text) as T)
+        const bodyStr = Buffer.concat(chunks).toString('utf-8')
+        if (!bodyStr.trim()) {
+          resolve({})
+          return
+        }
+        resolve(JSON.parse(bodyStr) as Record<string, unknown>)
       } catch (err) {
         reject(err)
       }
@@ -53,20 +66,45 @@ export async function readJsonBody<T = Record<string, unknown>>(
   })
 }
 
-export function writeJson(res: ServerResponse, status: number, data: unknown): void {
-  const content = JSON.stringify(data)
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(content),
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Audit-Token',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  })
-  res.end(content)
-}
-
 export interface GuardRouteOptions {
   interceptor: GuardInterceptor
+}
+
+function syncPatchFile(config: GuardConfig): void {
+  try {
+    const candidatePaths = [
+      join(homedir(), '.dsh', 'profiles', 'desktop', 'cordis.patch.yml'),
+      process.env.DSH_HOME ? join(process.env.DSH_HOME, 'profiles', 'desktop', 'cordis.patch.yml') : '',
+    ].filter(Boolean)
+
+    for (const patchPath of candidatePaths) {
+      if (existsSync(patchPath)) {
+        const content = readFileSync(patchPath, 'utf-8')
+        const blockRegex = /- id: (["']?)dsh-plugin-guard\1[\s\S]*?(?=\n- id:|\n- insert:|$)/
+        const newBlock = `- id: dsh-plugin-guard
+  name: "dsh-plugin-guard"
+  config:
+    strictMode: ${config.strictMode ?? true}
+    scanOnInstall: ${config.scanOnInstall ?? true}
+    scanOnUpdate: ${config.scanOnUpdate ?? true}
+    enableCache: ${config.enableCache ?? true}
+    model: "${config.model ?? 'static'}"
+    stagingTtlMs: ${config.stagingTtlMs ?? 300000}
+    allowedDomains:
+${(config.allowedDomains ?? ['registry.npmjs.org', 'github.com', 'api.github.com', 'dsh-market.com']).map((d) => `      - "${d}"`).join('\n')}`
+
+        if (content.includes('id: dsh-plugin-guard') && blockRegex.test(content)) {
+          writeFileSync(patchPath, content.replace(blockRegex, newBlock), 'utf-8')
+        } else {
+          const appendBlock = `\n${newBlock}\n`
+          writeFileSync(patchPath, content.trimEnd() + '\n' + appendBlock, 'utf-8')
+        }
+        break
+      }
+    }
+  } catch (err) {
+    console.warn('[dsh-plugin-guard] Failed to sync config to cordis.patch.yml:', err)
+  }
 }
 
 /**
@@ -92,12 +130,23 @@ export async function handleGuardRequest(
   // 1. Audit Endpoint: GET or POST /api/plugin-guard/audit or /gateway/guard/audit
   if (pathname === `${GUARD_API_PREFIX}/audit` || pathname === `${LEGACY_GUARD_PREFIX}/audit`) {
     let spec: string | undefined
+    let model: string | undefined
+    let forceRefresh = false
+    let noCache = false
 
     if (req.method === 'GET') {
       spec = parsed.searchParams.get('spec') ?? undefined
+      model = parsed.searchParams.get('model') ?? undefined
+      forceRefresh =
+        parsed.searchParams.get('forceRefresh') === 'true' ||
+        parsed.searchParams.get('nocache') === 'true'
+      noCache = parsed.searchParams.get('noCache') === 'true'
     } else if (req.method === 'POST') {
       const body = (await readJsonBody(req).catch(() => null)) as Record<string, unknown> | null
       spec = typeof body?.['spec'] === 'string' ? body['spec'] : undefined
+      model = typeof body?.['model'] === 'string' ? body['model'] : undefined
+      forceRefresh = Boolean(body?.['forceRefresh'] || body?.['nocache'])
+      noCache = Boolean(body?.['noCache'])
     }
 
     if (!spec || !spec.trim()) {
@@ -106,7 +155,7 @@ export async function handleGuardRequest(
     }
 
     try {
-      const report = await interceptor.audit(spec)
+      const report = await interceptor.audit(spec, { model, forceRefresh, noCache })
       writeJson(res, 200, { ok: true, report })
     } catch (err) {
       writeJson(res, 500, {
@@ -125,6 +174,7 @@ export async function handleGuardRequest(
     const body = (await readJsonBody(req).catch(() => null)) as Record<string, unknown> | null
     const spec = typeof body?.['spec'] === 'string' ? body['spec'] : undefined
     const force = Boolean(body?.['force'])
+    const model = typeof body?.['model'] === 'string' ? body['model'] : undefined
 
     if (!spec || !spec.trim()) {
       writeJson(res, 400, { error: '缺少 spec 参数' })
@@ -132,7 +182,7 @@ export async function handleGuardRequest(
     }
 
     try {
-      const result = await interceptor.approve(spec, { force })
+      const result = await interceptor.approve(spec, { force, model })
       writeJson(res, 200, { ok: true, ...result })
     } catch (err) {
       writeJson(res, 403, {
@@ -143,7 +193,59 @@ export async function handleGuardRequest(
     return true
   }
 
-  // 3. Intercept Install Gate: POST /api/plugin-manager/install or /gateway/install
+  // 3. Cache Management Endpoint: /api/plugin-guard/cache or /gateway/guard/cache
+  if (
+    pathname === `${GUARD_API_PREFIX}/cache` ||
+    pathname === `${LEGACY_GUARD_PREFIX}/cache`
+  ) {
+    const cacheManager = interceptor.getCacheManager()
+    if (req.method === 'GET') {
+      const stats = await cacheManager.getStats()
+      const entries = await cacheManager.list()
+      writeJson(res, 200, { ok: true, stats, entries })
+      return true
+    }
+    if (req.method === 'DELETE') {
+      const cleared = await cacheManager.clear()
+      writeJson(res, 200, { ok: true, cleared })
+      return true
+    }
+  }
+
+  if (
+    pathname === `${GUARD_API_PREFIX}/cache/clear` ||
+    pathname === `${LEGACY_GUARD_PREFIX}/cache/clear`
+  ) {
+    if (req.method === 'POST' || req.method === 'GET') {
+      const cleared = await interceptor.getCacheManager().clear()
+      writeJson(res, 200, { ok: true, cleared })
+      return true
+    }
+  }
+
+  // 4. Config Endpoint: GET or POST /api/plugin-guard/config or /gateway/guard/config
+  if (
+    pathname === `${GUARD_API_PREFIX}/config` ||
+    pathname === `${LEGACY_GUARD_PREFIX}/config`
+  ) {
+    if (req.method === 'GET') {
+      writeJson(res, 200, { ok: true, config: interceptor.getConfig() })
+      return true
+    }
+    if (req.method === 'POST') {
+      const body = (await readJsonBody(req).catch(() => null)) as Partial<GuardConfig> | null
+      if (!body || typeof body !== 'object') {
+        writeJson(res, 400, { ok: false, error: '缺少有效的 JSON 配置请求体' })
+        return true
+      }
+      const updated = interceptor.updateConfig(body)
+      syncPatchFile(updated)
+      writeJson(res, 200, { ok: true, config: updated })
+      return true
+    }
+  }
+
+  // 5. Intercept Install Gate: POST /api/plugin-manager/install or /gateway/install
   if (INTERCEPT_INSTALL_PATHS.has(pathname) && req.method === 'POST') {
     let body: Record<string, unknown> | null = null
     try {

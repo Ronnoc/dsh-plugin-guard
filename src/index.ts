@@ -21,6 +21,9 @@ export const Config: Schema<GuardConfig> = Schema.object({
   strictMode: Schema.boolean().default(true).description('严格模式：发现 CRITICAL 级别威胁时自动阻断安装'),
   scanOnInstall: Schema.boolean().default(true).description('是否拦截并预审插件安装请求'),
   scanOnUpdate: Schema.boolean().default(true).description('是否拦截并预审插件更新请求'),
+  enableCache: Schema.boolean().default(true).description('是否启用本地审计结果持久化缓存，避免重复扫描与 Token 消耗'),
+  model: Schema.string().default('static').description('默认审计模型或引擎标识 (默认为 static 静态规则引擎)'),
+  cacheDir: Schema.string().description('本地审计持久化缓存目录 (留空使用默认 ~/.dsh/cache/plugin-guard)'),
   allowedDomains: Schema.array(Schema.string()).default([
     'registry.npmjs.org',
     'github.com',
@@ -94,6 +97,7 @@ export default { name, inject, Config, apply }
 // Re-export core capabilities for programmatic usage
 export * from './core/constants.js'
 export * from './core/types.js'
+export * from './core/cache.js'
 export * from './core/stager.js'
 export * from './core/scanner.js'
 export * from './host/token.js'

@@ -7,12 +7,14 @@
 
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
-import type { AuditReport, GuardConfig } from './types.js'
+import { GUARD_VERSION } from './constants.js'
+import type { AuditOptions, AuditReport, GuardConfig } from './types.js'
 import { auditPackageDirectory } from './scanner.js'
+import type { AuditCacheManager } from './cache.js'
 
 const pExecFile = promisify(execFile)
 
@@ -26,12 +28,19 @@ export interface StageSession {
   cleanup: () => Promise<void>
 }
 
+export interface StageOptions extends AuditOptions {
+  cacheManager?: AuditCacheManager
+}
+
 /**
  * Downloads a package tarball and unpacks it strictly isolated from host runtime.
+ * Leverages local persistent cache by (model, pluginGuardVersion, plugin, tarballSha256)
+ * to skip redundant unpacking, AST parsing, and model re-evaluation.
  */
 export async function stageAndAuditPackage(
   spec: string,
   config: GuardConfig = {},
+  options?: StageOptions,
 ): Promise<StageSession> {
   const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
   const stageDir = join(tmpdir(), 'dsh-guard-staging', nonce)
@@ -49,12 +58,18 @@ export async function stageAndAuditPackage(
   }
 
   try {
+    const scanStart = Date.now()
+
     // 1. Download tarball with --ignore-scripts to prevent any lifecycle script execution
     // npm pack outputs the filename to stdout
-    const { stdout } = await pExecFile('npm', ['pack', spec, '--pack-destination', stageDir, '--ignore-scripts'], {
-      windowsHide: true,
-      timeout: 60000,
-    })
+    const { stdout } = await pExecFile(
+      'npm',
+      ['pack', spec, '--pack-destination', stageDir, '--ignore-scripts'],
+      {
+        windowsHide: true,
+        timeout: 60000,
+      },
+    )
 
     // Find the generated .tgz file in stageDir
     const files = readdirSync(stageDir)
@@ -69,7 +84,33 @@ export async function stageAndAuditPackage(
     const buffer = readFileSync(tarballPath)
     const tarballSha256 = createHash('sha256').update(buffer).digest('hex')
 
-    // 3. Unpack tarball safely using system tar (bsdtar is native in modern Windows/macOS/Linux)
+    const model = options?.model || config.model || 'static'
+    const cacheManager = options?.cacheManager
+    const shouldCheckCache = cacheManager && !options?.forceRefresh && !options?.noCache
+
+    // 3. Fast check persistent disk cache by content SHA-256 and (model, version, plugin)
+    if (shouldCheckCache) {
+      const cachedReport = await cacheManager.get({
+        model,
+        pluginGuardVersion: GUARD_VERSION,
+        plugin: spec,
+        tarballSha256,
+      })
+
+      if (cachedReport) {
+        return {
+          spec,
+          stageDir,
+          unpackedDir: '',
+          tarballPath,
+          tarballSha256,
+          report: cachedReport,
+          cleanup,
+        }
+      }
+    }
+
+    // 4. Unpack tarball safely using system tar (bsdtar is native in modern Windows/macOS/Linux)
     await pExecFile('tar', ['-xzf', tarballPath, '-C', unpackedDir], {
       windowsHide: true,
       timeout: 30000,
@@ -81,8 +122,37 @@ export async function stageAndAuditPackage(
       ? join(unpackedDir, 'package')
       : unpackedDir
 
-    // 4. Run static rule audit
+    // 5. Run static rule audit
     const report = auditPackageDirectory(spec, packageRoot, tarballSha256, config)
+    report.model = model
+    report.pluginGuardVersion = GUARD_VERSION
+    const durationMs = Date.now() - scanStart
+
+    // 6. Save audit report to persistent local disk cache
+    if (cacheManager && !options?.noCache) {
+      await cacheManager.set(
+        {
+          model,
+          pluginGuardVersion: GUARD_VERSION,
+          plugin: report.packageName,
+          tarballSha256,
+        },
+        report,
+        durationMs,
+      )
+      if (spec !== report.packageName) {
+        await cacheManager.set(
+          {
+            model,
+            pluginGuardVersion: GUARD_VERSION,
+            plugin: spec,
+            tarballSha256,
+          },
+          report,
+          durationMs,
+        )
+      }
+    }
 
     return {
       spec,

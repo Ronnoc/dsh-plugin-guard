@@ -68,6 +68,14 @@ export interface AuditReport {
   auditToken?: string
   /** Error message if staging or scanning encountered an issue */
   error?: string
+  /** Model or engine identifier used for this audit */
+  model?: string
+  /** Version of dsh-plugin-guard that conducted this audit */
+  pluginGuardVersion?: string
+  /** Whether this report was served from local persistent cache */
+  cached?: boolean
+  /** Unique composite cache key hash if cached */
+  cacheKey?: string
 }
 
 export interface GuardConfig {
@@ -83,6 +91,50 @@ export interface GuardConfig {
   stagingTtlMs?: number
   /** Secret key used to sign and verify approval tokens */
   tokenSecret?: string
+  /** Directory for persistent audit cache. Defaults to ~/.dsh/cache/plugin-guard */
+  cacheDir?: string
+  /** Whether persistent local disk caching is enabled (default: true) */
+  enableCache?: boolean
+  /** Default audit model identifier (default: 'static') */
+  model?: string
+}
+
+export interface AuditCacheKey {
+  /** AI Model or security engine identifier, e.g. 'static', 'deepseek-chat', 'deepseek-reasoner' */
+  model: string
+  /** Version of dsh-plugin-guard that performed the audit, e.g. '0.1.0' */
+  pluginGuardVersion: string
+  /** Plugin package name or spec, e.g. 'dsh-plugin-foo' or 'dsh-plugin-foo@1.0.0' */
+  plugin: string
+  /** SHA-256 digest of the pristine tarball */
+  tarballSha256: string
+}
+
+export interface AuditCacheEntry {
+  key: AuditCacheKey
+  report: AuditReport
+  metadata: {
+    createdAt: number
+    accessedAt: number
+    hitCount: number
+    scanDurationMs?: number
+    cachedBy: string
+  }
+}
+
+export interface AuditCacheStats {
+  totalEntries: number
+  totalHits: number
+  cacheDir: string
+}
+
+export interface AuditOptions {
+  /** Model or engine identifier to evaluate against (defaults to config.model or 'static') */
+  model?: string
+  /** Bypass and refresh local persistent cache */
+  forceRefresh?: boolean
+  /** Skip checking or writing to persistent cache */
+  noCache?: boolean
 }
 
 export interface FileEntry {
