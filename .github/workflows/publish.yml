@@ -1,0 +1,100 @@
+name: Publish Package to npm
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Semantic version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  bump-version:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.bump.outputs.new_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Configure Git Committer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump package version & create tag
+        id: bump
+        run: |
+          npm version ${{ github.event.inputs.version_type }} -m "chore(release): %s [skip ci]"
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "new_tag=v${NEW_VERSION}" >> $GITHUB_OUTPUT
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "v${NEW_VERSION}"
+
+  publish:
+    needs: [bump-version]
+    if: always() && (needs.bump-version.result == 'success' || github.event_name == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.new_tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Quality Gate (Typecheck, Test, Build)
+        run: npm run prepublishOnly
+
+      - name: Verify package contents (Dry-run)
+        run: npm pack --dry-run
+
+      - name: Publish to npm (Provenance enabled)
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Pack release tarball
+        id: pack
+        run: |
+          TGZ_NAME=$(npm pack)
+          echo "tgz_file=$TGZ_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump-version.outputs.new_tag || github.ref_name }}
+          name: ${{ needs.bump-version.outputs.new_tag || github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.pack.outputs.tgz_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

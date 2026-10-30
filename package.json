@@ -32,7 +32,19 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "release:patch": "npm version patch && git push --follow-tags",
+    "release:minor": "npm version minor && git push --follow-tags",
+    "release:major": "npm version major && git push --follow-tags"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "homepage": "https://github.com/Ronnoc/dsh-plugin-guard#readme",
+  "bugs": {
+    "url": "https://github.com/Ronnoc/dsh-plugin-guard/issues"
   },
   "keywords": [
     "deepseek-harness",
@@ -47,7 +59,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/kybconnor/dsh-plugin-guard.git"
+    "url": "https://github.com/Ronnoc/dsh-plugin-guard.git"
   },
   "files": [
     "lib",
