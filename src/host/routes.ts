@@ -7,9 +7,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { URL } from 'node:url'
 import type { GuardInterceptor } from './interceptor.js'
+import { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX } from '../core/constants.js'
 
-export const GUARD_API_PREFIX = '/api/plugin-guard'
-export const LEGACY_GUARD_PREFIX = '/gateway/guard'
+export { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX }
 
 export const INTERCEPT_INSTALL_PATHS = new Set([
   '/api/plugin-manager/install',

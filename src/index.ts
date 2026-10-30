@@ -92,6 +92,7 @@ export function apply(ctx: PluginContext, config: GuardConfig = {}): void {
 export default { name, inject, Config, apply }
 
 // Re-export core capabilities for programmatic usage
+export * from './core/constants.js'
 export * from './core/types.js'
 export * from './core/stager.js'
 export * from './core/scanner.js'
