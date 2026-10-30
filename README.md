@@ -1,12 +1,19 @@
 # dsh-plugin-guard 🛡️
 
-[![CI](https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![npm version](https://img.shields.io/badge/npm-v0.1.0-orange.svg)](https://www.npmjs.com/package/dsh-plugin-guard)
-[![dsh-plugin](https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg)](https://github.com/topics/dsh-plugin)
-[![cordis](https://img.shields.io/badge/framework-cordis-blueviolet.svg)](https://github.com/topics/cordis-plugin)
+<p align="center">
+  <b>English</b> &nbsp;•&nbsp; <a href="README.zh.md">简体中文</a>
+</p>
 
-> **Pre-installation Security Audit & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.**
+<p align="center">
+  <a href="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml"><img src="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
+  <a href="https://www.npmjs.com/package/dsh-plugin-guard"><img src="https://img.shields.io/badge/npm-v0.1.0-orange.svg" alt="npm version" /></a>
+  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg" alt="dsh-plugin" /></a>
+  <a href="https://github.com/topics/cordis-plugin"><img src="https://img.shields.io/badge/framework-cordis-blueviolet.svg" alt="cordis" /></a>
+</p>
+
+> **Pre-installation Security Audit & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.**  
+> *DeepSeek Harness (DSH) 插件安装前置安全预审与门禁拦截中间件。*
 
 ---
 
@@ -86,6 +93,7 @@ Or declare it in your `cordis.patch.yml`:
           - "registry.npmjs.org"
           - "github.com"
           - "api.github.com"
+          - "dsh-market.com"
 ```
 
 ---
@@ -97,7 +105,7 @@ Or declare it in your `cordis.patch.yml`:
 | `strictMode` | `boolean` | `true` | If true, packages with `CRITICAL` findings cannot be installed without explicit forced bypass. |
 | `scanOnInstall` | `boolean` | `true` | Intercepts and audits all incoming plugin installations. |
 | `scanOnUpdate` | `boolean` | `true` | Intercepts and audits plugin update operations. |
-| `allowedDomains`| `string[]` | `['registry.npmjs.org', 'github.com']` | Domain allowlist for network requests found in plugins. |
+| `allowedDomains`| `string[]` | `['registry.npmjs.org', 'github.com', 'api.github.com', 'dsh-market.com']` | Domain allowlist for network requests found in plugins. |
 | `stagingTtlMs` | `number` | `300000` (5m) | Time-to-live for staged files and approval tokens. |
 | `tokenSecret` | `string` | *(auto-generated)* | Cryptographic key used to sign approval tokens. |
 
@@ -140,6 +148,13 @@ npm run typecheck
 # Build library distribution
 npm run build
 ```
+
+---
+
+## 🌐 Languages / 多语言文档
+
+- [English (Current)](README.md)
+- [简体中文 (Chinese)](README.zh.md)
 
 ---
 

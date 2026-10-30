@@ -1,12 +1,19 @@
 # dsh-plugin-guard 🛡️
 
-[![CI](https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![npm version](https://img.shields.io/badge/npm-v0.1.0-orange.svg)](https://www.npmjs.com/package/dsh-plugin-guard)
-[![dsh-plugin](https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg)](https://github.com/topics/dsh-plugin)
-[![cordis](https://img.shields.io/badge/framework-cordis-blueviolet.svg)](https://github.com/topics/cordis-plugin)
+<p align="center">
+  <a href="README.md">English</a> &nbsp;•&nbsp; <b>简体中文</b>
+</p>
 
-> **DeepSeek Harness (DSH) 插件安装前置安全预审与门禁拦截中间件。**
+<p align="center">
+  <a href="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml"><img src="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
+  <a href="https://www.npmjs.com/package/dsh-plugin-guard"><img src="https://img.shields.io/badge/npm-v0.1.0-orange.svg" alt="npm version" /></a>
+  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg" alt="dsh-plugin" /></a>
+  <a href="https://github.com/topics/cordis-plugin"><img src="https://img.shields.io/badge/framework-cordis-blueviolet.svg" alt="cordis" /></a>
+</p>
+
+> **DeepSeek Harness (DSH) 插件安装前置安全预审与门禁拦截中间件。**  
+> *Pre-installation Security Audit & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.*
 
 ---
 
@@ -85,6 +92,7 @@ dsh plugin add dsh-plugin-guard
           - "registry.npmjs.org"
           - "github.com"
           - "api.github.com"
+          - "dsh-market.com"
 ```
 
 ---
@@ -96,7 +104,7 @@ dsh plugin add dsh-plugin-guard
 | `strictMode` | `boolean` | `true` | 严格模式：发现 `CRITICAL` 级别威胁时禁止常规放行，必须显式 force 覆盖。 |
 | `scanOnInstall` | `boolean` | `true` | 是否对安装请求强制执行安全门禁拦截。 |
 | `scanOnUpdate` | `boolean` | `true` | 是否对更新升级操作强制执行安全门禁拦截。 |
-| `allowedDomains`| `string[]` | `['registry.npmjs.org', 'github.com']` | 插件网络外联的合规域名白名单。 |
+| `allowedDomains`| `string[]` | `['registry.npmjs.org', 'github.com', 'api.github.com', 'dsh-market.com']` | 插件网络外联的合规域名白名单。 |
 | `stagingTtlMs` | `number` | `300000` (5分钟) | 暂存目录与放行 Token 的有效保留时间。 |
 | `tokenSecret` | `string` | *(自动随机生成)* | 用于对防篡改 Token 进行 HMAC 签名的密钥。 |
 
@@ -139,6 +147,13 @@ npm run typecheck
 # 编译为生产包
 npm run build
 ```
+
+---
+
+## 🌐 语言版本 / Documentation Languages
+
+- [简体中文 (中文当前)](README.zh.md)
+- [English (英文文档)](README.md)
 
 ---
 

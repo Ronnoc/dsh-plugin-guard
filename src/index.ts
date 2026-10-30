@@ -1,3 +1,4 @@
+import Schema from 'schemastery'
 /**
  * DSH Plugin Guard: Host-side Cordis Plugin Entrypoint
  * Registers pre-install security audits and gating routes in the DSH host web server.
@@ -15,6 +16,20 @@ import {
 
 export const name = 'dsh-plugin-guard'
 export const inject = ['webServer']
+
+export const Config: Schema<GuardConfig> = Schema.object({
+  strictMode: Schema.boolean().default(true).description('严格模式：发现 CRITICAL 级别威胁时自动阻断安装'),
+  scanOnInstall: Schema.boolean().default(true).description('是否拦截并预审插件安装请求'),
+  scanOnUpdate: Schema.boolean().default(true).description('是否拦截并预审插件更新请求'),
+  allowedDomains: Schema.array(Schema.string()).default([
+    'registry.npmjs.org',
+    'github.com',
+    'api.github.com',
+    'dsh-market.com',
+  ]).description('插件网络外联的合规白名单域名'),
+  stagingTtlMs: Schema.number().default(300000).description('沙箱暂存区与放行凭证保留时长 (毫秒)'),
+  tokenSecret: Schema.string().role('secret').description('用于签名放行 Token 的密钥 (留空自动生成)'),
+})
 
 export interface CordisWebServer {
   register(route: {
@@ -74,7 +89,7 @@ export function apply(ctx: PluginContext, config: GuardConfig = {}): void {
   }
 }
 
-export default { name, inject, apply }
+export default { name, inject, Config, apply }
 
 // Re-export core capabilities for programmatic usage
 export * from './core/types.js'

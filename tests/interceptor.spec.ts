@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { Config } from '../src/index.js'
 import { GuardInterceptor } from '../src/host/interceptor.js'
 
 describe('GuardInterceptor', () => {
@@ -29,5 +30,12 @@ describe('GuardInterceptor', () => {
     const replayCheck = interceptor.validateInstallRequest('clean-plugin@1.0.0', token)
     expect(replayCheck.allowed).toBe(false)
     expect(replayCheck.reason).toContain('禁止重放')
+  })
+
+  it('validates default config through Cordis Schemastery', () => {
+    const parsed = Config({})
+    expect(parsed.strictMode).toBe(true)
+    expect(parsed.scanOnInstall).toBe(true)
+    expect(parsed.allowedDomains).toContain('registry.npmjs.org')
   })
 })
