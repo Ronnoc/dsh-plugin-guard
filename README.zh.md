@@ -58,33 +58,10 @@
 
 ```mermaid
 flowchart LR
-    subgraph P1["1. 拦截与安全隔离"]
-        direction TB
-        Trigger["触发安装请求\n(市场点击 / Agent调用)"] --> ClientGate["Client 端 UI 门禁拦截\n(挂载 Fetch / 拦截请求)"]
-        ClientGate --> Staging["静态沙箱暂存\n(npm pack --ignore-scripts)"]
-    end
-
-    subgraph P2["2. 双引擎安全审查"]
-        direction TB
-        Cache{"4D 本地缓存命中?"}
-        Cache -- 未命中 --> Static["6 维静态安全规则扫描\n(凭证/执行/网络/MCP)"]
-        Static --> Agent["Agentic 大模型语义审查\n(意图偏差研判与打分)"]
-        Agent --> Report["生成综合审计报告\n(SAFE / CAUTION / DANGEROUS)"]
-        Cache -- 命中 --> Report
-    end
-
-    subgraph P3["3. 令牌门禁与落地"]
-        direction TB
-        Gate{"用户审批 / 策略门禁"}
-        Gate -- 批准放行 --> Token["签发防重放 AuditToken\n(HMAC-SHA256 绑定 Hash)"]
-        Token --> HostGate["Host 端路由门禁拦截\n(/api/plugin-manager/install)"]
-        HostGate -- 校验通过 --> Install["DSH 原生包管理器安全落地"]
-        Gate -- 拒绝终止 --> Abort["销毁暂存沙箱，安全阻断"]
-        HostGate -- 无Token/篡改 --> Reject["403 Forbidden: 拒绝安装"]
-    end
-
-    Staging --> Cache
-    Report --> Gate
+    S1["📦 1. 触发与安全拦截<br/><b>Client UI 门禁</b><br/>• 拦截 npm/dshm install<br/>• 静态沙箱暂存 (ignore-scripts)"]
+    --> S2["🔍 2. 双引擎安全审查<br/><b>Vetter 审计核心</b><br/>• 4D 复合内容寻址本地缓存<br/>• 6 维静态代码安全规则引擎<br/>• Agentic 大模型意图研判分析"]
+    --> S3["🛡️ 3. 报告与审批决断<br/><b>Audit 审批门禁</b><br/>• 综合评分与风险漏洞清单<br/>• 用户审查与放行/拒绝决策<br/>• 签发单次防重放 HMAC Token"]
+    --> S4["🚪 4. 路由门禁强制落地<br/><b>Host 路由门禁</b><br/>• 校验并销毁防篡改 Token<br/>• 校验通过: DSH 原生安全安装<br/>• 校验失败: 403 Forbidden 阻断"]
 ```
 
 ---

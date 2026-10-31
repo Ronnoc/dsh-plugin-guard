@@ -58,33 +58,10 @@ This exposes users to critical supply-chain risks:
 
 ```mermaid
 flowchart LR
-    subgraph P1["1. Intercept & Isolate"]
-        direction TB
-        Trigger["Install Request\n(Marketplace / Agent)"] --> ClientGate["Client UI Gate\n(Intercept & Freeze)"]
-        ClientGate --> Staging["Isolated Staging Sandbox\n(npm pack --ignore-scripts)"]
-    end
-
-    subgraph P2["2. Dual-Engine Audit"]
-        direction TB
-        Cache{"4D Cache Hit?"}
-        Cache -- Miss --> Static["6-Vector Static Analysis\n(Secrets/Exec/Network/MCP)"]
-        Static --> Agent["Agentic LLM Intent Review\n(Discrepancy & Score)"]
-        Agent --> Report["Audit Report Generated\n(SAFE / CAUTION / DANGEROUS)"]
-        Cache -- Hit --> Report
-    end
-
-    subgraph P3["3. Cryptographic Gate & Install"]
-        direction TB
-        Gate{"User / Policy Gate"}
-        Gate -- Approved --> Token["Mint Single-Use AuditToken\n(HMAC-SHA256 Signed)"]
-        Token --> HostGate["Host Route Gate\n(/api/plugin-manager/install)"]
-        HostGate -- Valid --> Install["DSH Native Package Manager\n(Install to Disk)"]
-        Gate -- Rejected --> Abort["Abort & Purge Staging"]
-        HostGate -- Invalid --> Reject["403 Forbidden: Blocked"]
-    end
-
-    Staging --> Cache
-    Report --> Gate
+    S1["📦 1. Intercept & Isolate<br/><b>Client UI Gate</b><br/>• Intercept npm/dshm install<br/>• Staging sandbox (ignore-scripts)"]
+    --> S2["🔍 2. Deep Security Audit<br/><b>Vetter Engine</b><br/>• 4D Content-addressed cache<br/>• 6-Vector static security rules<br/>• Agentic LLM intent analysis"]
+    --> S3["🛡️ 3. Verdict & Decision<br/><b>Audit Modal Gate</b><br/>• Risk report: SAFE/CAUTION/DANGER<br/>• User review & approval decision<br/>• Issue HMAC-SHA256 audit token"]
+    --> S4["🚪 4. Route Enforcement<br/><b>Host Route Gate</b><br/>• Invalidate single-use token<br/>• Verified: DSH native install<br/>• Invalid: 403 Forbidden block"]
 ```
 
 ---
