@@ -39,10 +39,14 @@ This exposes users to critical supply-chain risks:
   - **External Endpoints & C2**: Discovers unapproved outbound network requests, WebSockets, and telemetry URLs.
   - **Privilege & Permission Escalation**: Detects attempts to tamper with prompt confirmation gates or bypass permission checks.
   - **MCP Tool Capability Audit**: Inspects exported Model Context Protocol tools for destructive capabilities.
+- 🤖 **Agentic Semantic Reviewer & Intent Analysis**:
+  - Leverages LLM models (e.g. `deepseek-chat`, `deepseek-reasoner`, or local host AI) to perform contextual semantic analysis.
+  - Detects **Intent Discrepancy**: evaluates whether the package's actual code behaviors match its declared description and marketing claims.
+  - Generates clear, human-readable review rationales and actionable verdict recommendations (`APPROVE` | `REVIEW_CAREFULLY` | `REJECT`).
 - 🔐 **Tamper-Proof Approval Tokens**: Generates single-use, cryptographically signed (HMAC-SHA256) approval tokens binding `package@version` and pristine tarball SHA-256. Prevents replay attacks and TOCTOU tampering.
 - ⚡ **Multi-Dimensional Local Disk Cache (4-Vector Addressing)**: Composite content-addressed caching keyed by `(model, plugin-vetter version, plugin spec, tarballSha256)`.
   - **Zero Duplicate I/O & Zero AI Token Waste**: Auditing identical package tarballs under the same model hits disk cache in milliseconds without re-extraction or repeated LLM calls.
-  - **Rule Version Invalidation**: Automatic cache invalidation when rules or guard version update.
+  - **Rule Version Invalidation**: Automatic cache invalidation when rules or vetter version update.
   - **Model Isolation**: Segregates verdicts across `static` rule engine and LLM models (`deepseek-chat`, `deepseek-reasoner`, etc.).
 - 🚪 **Dual-Layer Interception Gate**:
   - **Client UI Layer**: Injects pre-install review prompt into the DSH marketplace, presenting findings before package installation.
@@ -111,6 +115,9 @@ Or declare it in your `cordis.patch.yml`:
 | `scanOnUpdate` | `boolean` | `true` | Intercepts and audits plugin update operations. |
 | `allowedDomains`| `string[]` | `['registry.npmjs.org', 'github.com', 'api.github.com', 'dsh-market.com']` | Domain allowlist for network requests found in plugins. |
 | `stagingTtlMs` | `number` | `300000` (5m) | Time-to-live for staged files and approval tokens. |
+| `model` | `string` | `'agent-reviewer'` | Audit engine / AI model (`'agent-reviewer'`, `'deepseek-chat'`, `'static'`). |
+| `enableCache` | `boolean` | `true` | Enables 4-dimensional local disk cache to eliminate duplicate scans and token usage. |
+| `cacheDir` | `string` | `~/.dsh/cache/plugin-vetter` | Custom directory for audit cache storage. |
 | `tokenSecret` | `string` | *(auto-generated)* | Cryptographic key used to sign approval tokens. |
 
 ---
@@ -134,6 +141,10 @@ export interface AuditReport {
     subprocesses: boolean       // Whether child processes are spawned
     mcpTools: string[]          // Declared MCP tools
   }
+  agentSummary?: string         // Agent explanation of safety status
+  intentAnalysis?: string       // Assessment of code vs declared description
+  recommendation?: 'APPROVE' | 'REVIEW_CAREFULLY' | 'REJECT'
+  cached?: boolean              // Whether served from local cache
   auditToken?: string           // Single-use token issued upon approval
 }
 ```

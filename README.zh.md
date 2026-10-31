@@ -13,7 +13,7 @@
 </p>
 
 > **DeepSeek Harness (DSH) 插件安装前置安全审查 (Vetting) 与门禁拦截中间件。**  
-> *Pre-installation Security Audit & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.*
+> *Pre-installation Security Vetting & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.*
 
 ---
 
@@ -39,10 +39,14 @@
   - **网络外联与 C2 探测**：提取并比对包内所有外部 URL、WebSocket 与遥测域名，识别未备案端点。
   - **特权越权防范**：检测是否试图篡改权限确认门禁（如伪造 `permissionConfirmedAt` 逃逸审查）。
   - **MCP 工具能力审计**：审查插件暴露给 Agent 的 MCP 工具，识别破坏性命令与文件清理操作。
+- 🤖 **Agentic 智能体语义审查与意图研判**：
+  - 调度本地或宿主大模型（如 `deepseek-chat`、`deepseek-reasoner`、`gemini-3.8-flash` 等）执行上下文深度语义分析。
+  - **意图偏差检测（Intent Discrepancy）**：研判插件源码行为与 `package.json` 描述/宣传功能是否吻合，发现挂羊头卖狗肉的后门隐患。
+  - 生成通俗易懂的审查摘要、关键考量依据与决策建议（`APPROVE` 放行 | `REVIEW_CAREFULLY` 建议人工复核 | `REJECT` 拒绝）。
 - 🔐 **防篡改放行凭证（Audit Token）**：基于 HMAC-SHA256 签发单次有效、带时间戳的防重放 Token，强制绑定 `spec` 与压缩包 SHA-256 哈希，彻底杜绝 TOCTOU 替换攻击。
 - ⚡ **本地多维持久化缓存（4 维正交隔离）**：基于 `(model, plugin-vetter 版本, plugin 包名, tarball SHA-256 内容哈希)` 建立复合内容寻址缓存。
   - **零重复 I/O 与零 AI Token 消耗**：同一插件版本在相同模型与规则下仅需审计一次，再次安装直接命中本地磁盘缓存。
-  - **规则版本自动失效**：Guard 规则或引擎版本升级时，旧版缓存自动隔离并触发全量重审，杜绝安全盲区。
+  - **规则版本自动失效**：Vetter 规则或引擎版本升级时，旧版缓存自动隔离并触发全量重审，杜绝安全盲区。
   - **跨模型完全隔离**：支持 `static` 静态引擎与各类 LLM（如 `deepseek-chat`、`deepseek-reasoner`）独立分权缓存，结论互不混淆。
 - 🚪 **双层门禁拦截体系**：
   - **Client 端 UI 门禁**：自动包装 DSH 市场安装流，在安装前弹出安全报告，让用户获知威胁等级并自主决断。
@@ -110,6 +114,9 @@ dsh plugin add dsh-plugin-vetter
 | `scanOnUpdate` | `boolean` | `true` | 是否对更新升级操作强制执行安全门禁拦截。 |
 | `allowedDomains`| `string[]` | `['registry.npmjs.org', 'github.com', 'api.github.com', 'dsh-market.com']` | 插件网络外联的合规域名白名单。 |
 | `stagingTtlMs` | `number` | `300000` (5分钟) | 暂存目录与放行 Token 的有效保留时间。 |
+| `model` | `string` | `'agent-reviewer'` | 审查引擎与 AI 模型（支持 `'agent-reviewer'`、`'deepseek-chat'`、`'static'` 等）。 |
+| `enableCache` | `boolean` | `true` | 是否启用 4 维正交本地磁盘缓存，消除重复静态分析与模型 Token 消耗。 |
+| `cacheDir` | `string` | `~/.dsh/cache/plugin-vetter` | 审查结果本地持久化缓存存储路径。 |
 | `tokenSecret` | `string` | *(自动随机生成)* | 用于对防篡改 Token 进行 HMAC 签名的密钥。 |
 
 ---
@@ -133,6 +140,10 @@ export interface AuditReport {
     subprocesses: boolean       // 是否涉及子进程派生
     mcpTools: string[]          // 暴露的 MCP 工具列表
   }
+  agentSummary?: string         // AI 智能体审查摘要与评估说明
+  intentAnalysis?: string       // 代码实际行为与声称功能的匹配度分析
+  recommendation?: 'APPROVE' | 'REVIEW_CAREFULLY' | 'REJECT' // 专家决策建议
+  cached?: boolean              // 是否命中本地持久化缓存
   auditToken?: string           // 用户审批后签发的放行凭证
 }
 ```
