@@ -1,7 +1,7 @@
 /**
  * Rule: Network Outbound & Exfiltration Guard
  * Inspects all hardcoded external network endpoints, WebSockets, and known C2 vectors.
- * @module dsh-plugin-guard/core/rules/network
+ * @module dsh-plugin-vetter/core/rules/network
  */
 
 import type { AuditFinding, GuardRule, RuleContext } from '../types.js'

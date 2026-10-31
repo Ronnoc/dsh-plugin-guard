@@ -1,14 +1,14 @@
 /**
- * DSH Plugin Guard: Persistent Local Security Audit Cache
+ * DSH Plugin Vetter: Persistent Local Security Audit Cache
  * Content-addressed and multi-dimensional caching by:
  * 1. model (e.g. 'static', 'deepseek-chat', 'deepseek-reasoner')
- * 2. pluginGuardVersion (e.g. '0.1.0')
+ * 2. pluginVetterVersion (e.g. '0.1.0')
  * 3. plugin (spec or package name)
  * 4. tarballSha256 (plugin tarball content digest)
  *
  * Eliminates redundant tarball downloading, extraction, AST rule evaluation,
  * and high-cost LLM API token consumption for previously verified plugin versions.
- * @module dsh-plugin-guard/core/cache
+ * @module dsh-plugin-vetter/core/cache
  */
 
 import { createHash } from 'node:crypto'
@@ -23,7 +23,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { GUARD_VERSION } from './constants.js'
+import { VETTER_VERSION, GUARD_VERSION } from './constants.js'
 import type {
   AuditCacheEntry,
   AuditCacheKey,
@@ -37,7 +37,7 @@ import type {
  */
 export function computeAuditCacheKey(key: AuditCacheKey): string {
   const model = (key.model || 'static').trim().toLowerCase()
-  const version = (key.pluginGuardVersion || GUARD_VERSION).trim()
+  const version = (key.pluginVetterVersion || key.pluginGuardVersion || VETTER_VERSION).trim()
   const plugin = (key.plugin || '').trim().toLowerCase()
   const sha256 = (key.tarballSha256 || '').trim().toLowerCase()
 
@@ -48,7 +48,8 @@ export function computeAuditCacheKey(key: AuditCacheKey): string {
 export interface SpecIndexEntry {
   tarballSha256: string
   model: string
-  pluginGuardVersion: string
+  pluginVetterVersion: string
+  pluginGuardVersion?: string
   updatedAt: number
 }
 
@@ -72,8 +73,8 @@ export class AuditCacheManager {
     const baseDir =
       options.cacheDir ||
       (process.env.DSH_CACHE_DIR
-        ? join(process.env.DSH_CACHE_DIR, 'plugin-guard')
-        : join(homedir(), '.dsh', 'cache', 'plugin-guard'))
+        ? join(process.env.DSH_CACHE_DIR, 'plugin-vetter')
+        : join(homedir(), '.dsh', 'cache', 'plugin-vetter'))
 
     this.cacheDir = baseDir
     this.auditsDir = join(baseDir, 'audits')
@@ -121,7 +122,7 @@ export class AuditCacheManager {
   async findBySpec(
     spec: string,
     model: string = this.defaultModel,
-    version: string = GUARD_VERSION,
+    version: string = VETTER_VERSION,
   ): Promise<AuditReport | null> {
     if (!this.enabled) return null
 
@@ -130,10 +131,11 @@ export class AuditCacheManager {
     const record = index[normSpec]
     if (!record) return null
 
-    // Ensure model and plugin-guard version match
+    // Ensure model and plugin-vetter version match
+    const recVersion = record.pluginVetterVersion || record.pluginGuardVersion || ''
     if (
       record.model.toLowerCase() !== model.toLowerCase() ||
-      record.pluginGuardVersion !== version
+      recVersion !== version
     ) {
       return null
     }
@@ -142,6 +144,7 @@ export class AuditCacheManager {
       plugin: spec,
       tarballSha256: record.tarballSha256,
       model,
+      pluginVetterVersion: version,
       pluginGuardVersion: version,
     })
   }
@@ -165,12 +168,12 @@ export class AuditCacheManager {
 
       // Strict validation of the 4 dimensions
       const normModel = (key.model || 'static').trim().toLowerCase()
-      const normVersion = (key.pluginGuardVersion || GUARD_VERSION).trim()
+      const normVersion = (key.pluginVetterVersion || key.pluginGuardVersion || VETTER_VERSION).trim()
       const normHash = (key.tarballSha256 || '').trim().toLowerCase()
 
       if (
         (entry.key.model || '').toLowerCase() !== normModel ||
-        entry.key.pluginGuardVersion !== normVersion ||
+        (entry.key.pluginVetterVersion || entry.key.pluginGuardVersion) !== normVersion ||
         (entry.key.tarballSha256 || '').toLowerCase() !== normHash
       ) {
         return null
@@ -218,11 +221,12 @@ export class AuditCacheManager {
     const tempPath = join(this.auditsDir, `${cacheHash}.${Date.now()}.tmp`)
 
     const normModel = (key.model || 'static').trim().toLowerCase()
-    const normVersion = (key.pluginGuardVersion || GUARD_VERSION).trim()
+    const normVersion = (key.pluginVetterVersion || key.pluginGuardVersion || VETTER_VERSION).trim()
 
     const entry: AuditCacheEntry = {
       key: {
         model: normModel,
+        pluginVetterVersion: normVersion,
         pluginGuardVersion: normVersion,
         plugin: key.plugin.trim(),
         tarballSha256: key.tarballSha256.trim().toLowerCase(),
@@ -230,6 +234,7 @@ export class AuditCacheManager {
       report: {
         ...report,
         model: normModel,
+        pluginVetterVersion: normVersion,
         pluginGuardVersion: normVersion,
         cacheKey: cacheHash,
       },
@@ -238,7 +243,7 @@ export class AuditCacheManager {
         accessedAt: Date.now(),
         hitCount: 0,
         scanDurationMs,
-        cachedBy: `dsh-plugin-guard@${normVersion}`,
+        cachedBy: `dsh-plugin-vetter@${normVersion}`,
       },
     }
 
@@ -265,6 +270,7 @@ export class AuditCacheManager {
       index[normSpec] = {
         tarballSha256: key.tarballSha256.trim().toLowerCase(),
         model: normModel,
+        pluginVetterVersion: normVersion,
         pluginGuardVersion: normVersion,
         updatedAt: Date.now(),
       }
@@ -272,7 +278,7 @@ export class AuditCacheManager {
 
       return cacheHash
     } catch (err) {
-      console.warn('[dsh-plugin-guard] Failed to write persistent audit cache:', err)
+      console.warn('[dsh-plugin-vetter] Failed to write persistent audit cache:', err)
       return ''
     }
   }

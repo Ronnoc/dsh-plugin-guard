@@ -2,7 +2,7 @@
  * DSH Plugin Guard: Marketplace ID & Package Spec Resolver
  * Resolves DSH Marketplace identifiers (e.g., community `amlyczz--dsh-agy-link`)
  * to valid npm package names, GitHub targets, or direct URLs.
- * @module dsh-plugin-guard/core/resolver
+ * @module dsh-plugin-vetter/core/resolver
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -10,17 +10,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import type { ResolvedSpecInfo } from './types.js'
+
+export type { ResolvedSpecInfo }
 
 const pExecFile = promisify(execFile)
-
-export interface ResolvedSpecInfo {
-  originalSpec: string
-  resolvedSpec: string
-  packageName: string
-  version?: string
-  source: 'npm' | 'github' | 'url' | 'tarball'
-  isMarketId: boolean
-}
 
 interface CatalogEntry {
   id?: string
@@ -34,6 +28,10 @@ interface CatalogEntry {
 
 let catalogCache: { entries: CatalogEntry[]; timestamp: number } | null = null
 const CATALOG_CACHE_TTL_MS = 60_000 // 1 minute cache for catalog files
+
+export function clearCatalogCache(): void {
+  catalogCache = null
+}
 
 /**
  * Discovers and loads plugin catalog entries from local DSH / dsh-m cache directories.

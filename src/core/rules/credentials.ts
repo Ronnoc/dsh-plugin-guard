@@ -2,7 +2,7 @@
  * Rule: Credentials & Secret Store Protection
  * Detects unauthorized probing or reading of user secrets, SSH keys, DSH configs,
  * and environment credentials.
- * @module dsh-plugin-guard/core/rules/credentials
+ * @module dsh-plugin-vetter/core/rules/credentials
  */
 
 import type { AuditFinding, GuardRule, RuleContext } from '../types.js'

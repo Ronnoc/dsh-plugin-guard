@@ -1,7 +1,7 @@
 {
-  "name": "dsh-plugin-guard",
+  "name": "dsh-plugin-vetter",
   "version": "0.1.0",
-  "description": "Pre-installation security audit and approval gate middleware for DeepSeek Harness (DSH) plugins.",
+  "description": "Pre-installation security audit, vetting, and approval gate middleware for DeepSeek Harness (DSH) plugins.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -42,9 +42,9 @@
     "access": "public",
     "provenance": true
   },
-  "homepage": "https://github.com/Ronnoc/dsh-plugin-guard#readme",
+  "homepage": "https://github.com/Ronnoc/dsh-plugin-vetter#readme",
   "bugs": {
-    "url": "https://github.com/Ronnoc/dsh-plugin-guard/issues"
+    "url": "https://github.com/Ronnoc/dsh-plugin-vetter/issues"
   },
   "keywords": [
     "deepseek-harness",
@@ -61,6 +61,8 @@
     "security",
     "security-audit",
     "audit",
+    "vetting",
+    "vetter",
     "supply-chain",
     "supply-chain-security",
     "sandbox"
@@ -69,7 +71,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Ronnoc/dsh-plugin-guard.git"
+    "url": "https://github.com/Ronnoc/dsh-plugin-vetter.git"
   },
   "files": [
     "lib",

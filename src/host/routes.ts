@@ -10,8 +10,8 @@ import type { GuardInterceptor } from './interceptor.js'
 
 /**
  * DSH Plugin Guard: Host HTTP Route Handlers & Interception Middleware
- * Intercepts /api/plugin-manager/install and exposes /api/plugin-guard audit APIs.
- * @module dsh-plugin-guard/host/routes
+ * Intercepts /api/plugin-manager/install and exposes /api/plugin-vetter audit APIs.
+ * @module dsh-plugin-vetter/host/routes
  */
 
 export const INTERCEPT_INSTALL_PATHS = new Set([
@@ -80,9 +80,9 @@ function syncPatchFile(config: GuardConfig): void {
     for (const patchPath of candidatePaths) {
       if (existsSync(patchPath)) {
         const content = readFileSync(patchPath, 'utf-8')
-        const blockRegex = /- id: (["']?)dsh-plugin-guard\1[\s\S]*?(?=\n- id:|\n- insert:|$)/
-        const newBlock = `- id: dsh-plugin-guard
-  name: "dsh-plugin-guard"
+        const blockRegex = /- id: (["']?)dsh-plugin-vetter\1[\s\S]*?(?=\n- id:|\n- insert:|$)/
+        const newBlock = `- id: dsh-plugin-vetter
+  name: "dsh-plugin-vetter"
   config:
     strictMode: ${config.strictMode ?? true}
     scanOnInstall: ${config.scanOnInstall ?? true}
@@ -93,7 +93,7 @@ function syncPatchFile(config: GuardConfig): void {
     allowedDomains:
 ${(config.allowedDomains ?? ['registry.npmjs.org', 'github.com', 'api.github.com', 'dsh-market.com']).map((d) => `      - "${d}"`).join('\n')}`
 
-        if (content.includes('id: dsh-plugin-guard') && blockRegex.test(content)) {
+        if ((content.includes('id: dsh-plugin-vetter') || content.includes('id: dsh-plugin-guard')) && blockRegex.test(content)) {
           writeFileSync(patchPath, content.replace(blockRegex, newBlock), 'utf-8')
         } else {
           const appendBlock = `\n${newBlock}\n`
@@ -103,7 +103,7 @@ ${(config.allowedDomains ?? ['registry.npmjs.org', 'github.com', 'api.github.com
       }
     }
   } catch (err) {
-    console.warn('[dsh-plugin-guard] Failed to sync config to cordis.patch.yml:', err)
+    console.warn('[dsh-plugin-vetter] Failed to sync config to cordis.patch.yml:', err)
   }
 }
 
@@ -127,7 +127,19 @@ export async function handleGuardRequest(
     return true
   }
 
-  // 1. Audit Endpoint: GET or POST /api/plugin-guard/audit or /gateway/guard/audit
+  // Hot unplug check: if interceptor is disposed, immediately bypass
+  if (interceptor.isDisposed()) {
+    if (INTERCEPT_INSTALL_PATHS.has(pathname)) {
+      return false
+    }
+    if (pathname.startsWith(GUARD_API_PREFIX) || pathname.startsWith(LEGACY_GUARD_PREFIX)) {
+      writeJson(res, 404, { ok: false, error: '安全防御服务已停用或已拔出 (Guard is disposed)' })
+      return true
+    }
+    return false
+  }
+
+  // 1. Audit Endpoint: GET or POST /api/plugin-vetter/audit or /gateway/guard/audit
   if (pathname === `${GUARD_API_PREFIX}/audit` || pathname === `${LEGACY_GUARD_PREFIX}/audit`) {
     let spec: string | undefined
     let model: string | undefined
@@ -166,7 +178,7 @@ export async function handleGuardRequest(
     return true
   }
 
-  // 2. Approve Endpoint: POST /api/plugin-guard/approve or /gateway/guard/approve
+  // 2. Approve Endpoint: POST /api/plugin-vetter/approve or /gateway/guard/approve
   if (
     (pathname === `${GUARD_API_PREFIX}/approve` || pathname === `${LEGACY_GUARD_PREFIX}/approve`) &&
     req.method === 'POST'
@@ -194,7 +206,7 @@ export async function handleGuardRequest(
     return true
   }
 
-  // 3. Cache Management Endpoint: /api/plugin-guard/cache or /gateway/guard/cache
+  // 3. Cache Management Endpoint: /api/plugin-vetter/cache or /gateway/guard/cache
   if (
     pathname === `${GUARD_API_PREFIX}/cache` ||
     pathname === `${LEGACY_GUARD_PREFIX}/cache`
@@ -230,7 +242,7 @@ export async function handleGuardRequest(
     }
   }
 
-  // 4. Config Endpoint: GET or POST /api/plugin-guard/config or /gateway/guard/config
+  // 4. Config Endpoint: GET or POST /api/plugin-vetter/config or /gateway/guard/config
   if (
     pathname === `${GUARD_API_PREFIX}/config` ||
     pathname === `${LEGACY_GUARD_PREFIX}/config`

@@ -2,7 +2,7 @@
  * DSH Plugin Guard: Safe Isolated Stager
  * Fetches and unpacks npm packages into a transient isolated sandbox using `--ignore-scripts`.
  * Guarantees zero code execution during the auditing phase.
- * @module dsh-plugin-guard/core/stager
+ * @module dsh-plugin-vetter/core/stager
  */
 
 import { createHash } from 'node:crypto'
@@ -62,7 +62,7 @@ export async function stageAndAuditPackage(
   try {
     const trimmedSpec = spec.trim()
     if (!trimmedSpec || /[;&|`$<>]/.test(trimmedSpec)) {
-      throw new Error(`[dsh-plugin-guard] 非法的包名称或版本标识符: "${spec}"`)
+      throw new Error(`[dsh-plugin-vetter] 非法的包名称或版本标识符: "${spec}"`)
     }
 
     const scanStart = Date.now()

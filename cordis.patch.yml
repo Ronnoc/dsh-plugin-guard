@@ -1,8 +1,8 @@
-# DSH Plugin Guard: Pre-install Security Audit & Interception Gate
+# DSH Plugin Vetter: Pre-install Security Audit & Interception Gate
 # Registered as a host-authoritative Cordis plugin.
 - insert:
-    - id: dsh-plugin-guard
-      name: dsh-plugin-guard
+    - id: dsh-plugin-vetter
+      name: dsh-plugin-vetter
       config:
         # If true, blocks installation automatically when any CRITICAL finding is detected
         strictMode: true

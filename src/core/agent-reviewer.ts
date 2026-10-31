@@ -2,7 +2,7 @@
  * DSH Plugin Guard: Agent-Driven Code Reviewer
  * Reviews staged package code in a read-only sandbox against authoritative security standards.
  * Evaluates intent alignment, supply chain integrity, credential safety, and privilege abuse.
- * @module dsh-plugin-guard/core/agent-reviewer
+ * @module dsh-plugin-vetter/core/agent-reviewer
  */
 
 import type {
@@ -219,7 +219,7 @@ async function callHostLlm(
   const stream = await llm.stream({
     provider,
     model,
-    sessionId: 'dsh-plugin-guard-review',
+    sessionId: 'dsh-plugin-vetter-review',
     messages,
     system,
     temperature: 0.2,
@@ -500,7 +500,7 @@ export async function auditPackageWithAgent(
       usedLlm = true
     } catch (llmErr) {
       console.warn(
-        `[dsh-plugin-guard] Host LLM review failed, falling back to contextual semantic analyzer:`,
+        `[dsh-plugin-vetter] Host LLM review failed, falling back to contextual semantic analyzer:`,
         llmErr instanceof Error ? llmErr.message : llmErr,
       )
       reviewData = contextualSemanticReview(spec, pkgInfo, files)

@@ -6,6 +6,7 @@ import {
   inject,
   patchFetch,
   clearRecentApprovals,
+  showAgentReviewModal,
 } from '../src/client.js'
 import type { AuditReport } from '../src/core/types.js'
 import { readFileSync, existsSync } from 'node:fs'
@@ -17,7 +18,7 @@ describe('client module', () => {
     clearRecentApprovals()
   })
   it('has expected metadata', () => {
-    expect(name).toBe('dsh-plugin-guard')
+    expect(name).toBe('dsh-plugin-vetter')
     expect(Array.isArray(inject)).toBe(true)
   })
 
@@ -86,6 +87,56 @@ describe('client module', () => {
     const summary = formatAuditSummary(cachedReport)
     expect(summary).toContain('命中本地持久化安全缓存')
     expect(summary).toContain('零重复消耗')
+  })
+
+  it('renders review modal with z-index 2147483647 so it is never occluded by dsh-m overlay', () => {
+    const mockReport: AuditReport = {
+      spec: 'test-pkg@1.0.0',
+      packageName: 'test-pkg',
+      version: '1.0.0',
+      tarballSha256: 'abcdef',
+      verdict: 'SAFE',
+      score: 95,
+      findings: [],
+      permissions: { network: [], filesystem: [], subprocesses: false, mcpTools: [] },
+      stagedAt: Date.now(),
+    }
+
+    let createdCount = 0
+    let modalRootElement: any = null
+
+    const fakeDocument: any = {
+      body: {
+        appendChild: vi.fn(),
+      },
+      getElementById: vi.fn().mockReturnValue(null),
+      createElement: vi.fn().mockImplementation((tag: string) => {
+        createdCount++
+        const el: any = {
+          id: '',
+          style: {},
+          appendChild: vi.fn(),
+          remove: vi.fn(),
+          innerHTML: '',
+        }
+        if (createdCount === 1) {
+          modalRootElement = el
+        }
+        return el
+      }),
+    }
+
+    vi.stubGlobal('document', fakeDocument)
+
+    showAgentReviewModal(mockReport)
+
+    expect(modalRootElement).not.toBeNull()
+    expect(modalRootElement.id).toBe('dsh-plugin-vetter-modal-root')
+    expect(modalRootElement.style.zIndex).toBe('2147483647')
+    expect(modalRootElement.style.webkitAppRegion).toBe('no-drag')
+    expect(fakeDocument.body.appendChild).toHaveBeenCalledWith(modalRootElement)
+
+    vi.unstubAllGlobals()
   })
 
   it('hooks ctx.remote.pluginManager.installBundle correctly when defined as getter (real DSH runtime)', async () => {
@@ -228,7 +279,7 @@ describe('client module', () => {
 
     // Must contain ModuleLoader registration
     expect(clientJs).toContain('window.__ModuleLoader__.load')
-    expect(clientJs).toContain('dsh-plugin-guard')
+    expect(clientJs).toContain('dsh-plugin-vetter')
 
     // Simulate DSH module loader environment
     let registeredPayload: any = null
@@ -243,17 +294,17 @@ describe('client module', () => {
     const runner = new Function('window', clientJs)
     expect(() => runner(fakeWindow)).not.toThrow()
     expect(registeredPayload).not.toBeNull()
-    expect(registeredPayload.id).toBe('dsh-plugin-guard')
+    expect(registeredPayload.id).toBe('dsh-plugin-vetter')
 
     const moduleExports = registeredPayload.factory(() => ({}))
-    expect(moduleExports.name).toBe('dsh-plugin-guard')
+    expect(moduleExports.name).toBe('dsh-plugin-vetter')
     expect(typeof moduleExports.apply).toBe('function')
   })
 
   it('patchFetch intercepts /dshm install requests and attaches audit token on approval', async () => {
     let dshmReceivedBody: any = null
     const fetchMock = vi.fn().mockImplementation((url: string, opts?: any) => {
-      if (url.includes('/api/plugin-guard/audit')) {
+      if (url.includes('/api/plugin-vetter/audit')) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -272,7 +323,7 @@ describe('client module', () => {
             }),
         })
       }
-      if (url.includes('/api/plugin-guard/approve')) {
+      if (url.includes('/api/plugin-vetter/approve')) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -307,15 +358,15 @@ describe('client module', () => {
     expect(data.ok).toBe(true)
     expect(dshmReceivedBody).toBeDefined()
     expect(dshmReceivedBody.auditToken).toBe('approved-token-xyz')
-    expect(fetchMock.mock.calls[0][0]).toContain('/api/plugin-guard/audit?spec=dsh-claude-style%400.19.6')
-    expect(fetchMock.mock.calls[1][0]).toContain('/api/plugin-guard/approve')
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/plugin-vetter/audit?spec=dsh-claude-style%400.19.6')
+    expect(fetchMock.mock.calls[1][0]).toContain('/api/plugin-vetter/approve')
 
     vi.unstubAllGlobals()
   })
 
   it('patchFetch aborts /dshm install when user rejects dangerous warning', async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/api/plugin-guard/audit')) {
+      if (url.includes('/api/plugin-vetter/audit')) {
         return Promise.resolve({
           ok: true,
           json: () =>
@@ -357,7 +408,7 @@ describe('client module', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ method: 'install', id: 'dsh-claude-style' }),
       }),
-    ).rejects.toThrow(/\[dsh-plugin-guard\] 用户中止了高危插件 dsh-claude-style 的安装/)
+    ).rejects.toThrow(/\[dsh-plugin-vetter\] 用户中止了高危插件 dsh-claude-style 的安装/)
 
     vi.unstubAllGlobals()
   })
@@ -379,10 +430,10 @@ describe('client module', () => {
     const rowSlot = registered.find(r => r.options.name === "plugins.row.config")
 
     expect(settingsSlot).toBeDefined()
-    expect(settingsSlot?.options.id).toBe("plugin-guard")
+    expect(settingsSlot?.options.id).toBe("plugin-vetter")
     expect(bundleSlot).toBeDefined()
-    expect(bundleSlot?.options.key).toBe("dsh-plugin-guard")
+    expect(bundleSlot?.options.key).toBe("dsh-plugin-vetter")
     expect(rowSlot).toBeDefined()
-    expect(rowSlot?.options.key).toBe("dsh-plugin-guard#dsh-plugin-guard")
+    expect(rowSlot?.options.key).toBe("dsh-plugin-vetter#dsh-plugin-vetter")
   })
 })

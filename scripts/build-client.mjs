@@ -23,7 +23,7 @@ ${code}
 
   if (typeof window !== "undefined" && window.__ModuleLoader__) {
     window.__ModuleLoader__.load({
-      id: "dsh-plugin-guard",
+      id: "dsh-plugin-vetter",
       factory: __factory__
     });
   }

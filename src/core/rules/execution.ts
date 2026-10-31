@@ -1,7 +1,7 @@
 /**
  * Rule: Subprocess & Dynamic Code Execution Guard
  * Flags unauthorized shell command execution, dynamic evaluation, and binary spawning.
- * @module dsh-plugin-guard/core/rules/execution
+ * @module dsh-plugin-vetter/core/rules/execution
  */
 
 import type { AuditFinding, GuardRule, RuleContext } from '../types.js'

@@ -1,7 +1,7 @@
 /**
  * DSH Plugin Guard: Core Audit Scanner Engine
  * Runs static rules over unpacked package sources and computes safety score and verdict.
- * @module dsh-plugin-guard/core/scanner
+ * @module dsh-plugin-vetter/core/scanner
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -193,7 +193,7 @@ export function auditPackageDirectory(
       const results = rule.run(ctx)
       findings.push(...results)
     } catch (err) {
-      console.error(`[dsh-plugin-guard] Error executing rule ${rule.id}:`, err)
+      console.error(`[dsh-plugin-vetter] Error executing rule ${rule.id}:`, err)
     }
   }
 

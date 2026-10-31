@@ -1,14 +1,14 @@
 /**
  * DSH Plugin Guard: Client-side Interception, Pre-installation Audit Gate & UI Settings
  * Injected into the DSH browser UI to prompt users with security audit findings and provide settings.
- * @module dsh-plugin-guard/client
+ * @module dsh-plugin-vetter/client
  */
 
 import React, { useState, useEffect, createElement as h } from 'react'
 import type { AuditReport, GuardConfig, AuditCacheEntry, AuditCacheStats } from './core/types.js'
 import { GUARD_API_PREFIX, LEGACY_GUARD_PREFIX } from './core/constants.js'
 
-export const name = 'dsh-plugin-guard'
+export const name = 'dsh-plugin-vetter'
 export const inject = ['slots', 'locale']
 
 export interface RemotePluginManager {
@@ -228,11 +228,11 @@ export function showAgentReviewModal(report: AuditReport): Promise<boolean> {
   }
 
   return new Promise((resolve) => {
-    const existing = document.getElementById('dsh-plugin-guard-modal-root')
+    const existing = document.getElementById('dsh-plugin-vetter-modal-root')
     if (existing) existing.remove()
 
     const root = document.createElement('div')
-    root.id = 'dsh-plugin-guard-modal-root'
+    root.id = 'dsh-plugin-vetter-modal-root'
     root.style.position = 'fixed'
     root.style.top = '0'
     root.style.left = '0'
@@ -240,13 +240,16 @@ export function showAgentReviewModal(report: AuditReport): Promise<boolean> {
     root.style.height = '100vh'
     root.style.backgroundColor = 'rgba(15, 23, 42, 0.65)'
     root.style.backdropFilter = 'blur(6px)'
-    root.style.zIndex = '999999'
+    // Must be greater than dsh-m marketplace overlay (z-index: 2147483000~2147483300)
+    // 2147483647 (INT32_MAX) is the maximum safe CSS z-index across all modern browsers
+    root.style.zIndex = '2147483647'
     root.style.display = 'flex'
     root.style.alignItems = 'center'
     root.style.justifyContent = 'center'
     root.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif'
     root.style.padding = '20px'
     root.style.boxSizing = 'border-box'
+    ;(root.style as any).webkitAppRegion = 'no-drag'
 
     const card = document.createElement('div')
     card.style.background = '#ffffff'
@@ -451,9 +454,9 @@ export async function auditAndConfirm(spec: string): Promise<string> {
 
       if (!shouldProceed) {
         if (report.verdict === 'DANGEROUS') {
-          throw new Error(`[dsh-plugin-guard] 用户中止了高危插件 ${spec} 的安装`)
+          throw new Error(`[dsh-plugin-vetter] 用户中止了高危插件 ${spec} 的安装`)
         } else {
-          throw new Error(`[dsh-plugin-guard] 用户取消了 ${spec} 的安装`)
+          throw new Error(`[dsh-plugin-vetter] 用户取消了 ${spec} 的安装`)
         }
       }
 
@@ -480,10 +483,26 @@ export async function auditAndConfirm(spec: string): Promise<string> {
 /**
  * Safely patch installBundle on remote pluginManager (supporting getter-only descriptors).
  */
-function patchInstallBundle(pm: any): boolean {
-  if (!pm || pm.__pluginGuardInstallBundlePatched) return false
+function patchInstallBundle(pm: any): (() => void) | false {
+  if (!pm) return false
+
+  // If already patched, unhook first to attach cleanly
+  if (pm.__pluginGuardInstallBundlePatched && pm.__origInstallBundleDesc) {
+    Object.defineProperty(pm, 'installBundle', pm.__origInstallBundleDesc)
+    delete pm.__origInstallBundleDesc
+    delete pm.__pluginGuardInstallBundlePatched
+  }
 
   const desc = Object.getOwnPropertyDescriptor(pm, 'installBundle')
+  pm.__origInstallBundleDesc = desc
+
+  const unhook = () => {
+    if (pm.__origInstallBundleDesc) {
+      Object.defineProperty(pm, 'installBundle', pm.__origInstallBundleDesc)
+      delete pm.__origInstallBundleDesc
+      delete pm.__pluginGuardInstallBundlePatched
+    }
+  }
 
   if (desc?.get) {
     const origGet = desc.get
@@ -493,11 +512,21 @@ function patchInstallBundle(pm: any): boolean {
         enumerable: true,
         get: function (this: any) {
           const rawFn = origGet.call(this)
+          if (!isClientActive) return rawFn
           const guarded = async (spec: string, options?: any) => {
-            const auditToken = await auditAndConfirm(spec)
+            if (!isClientActive) return rawFn(spec, options)
+            let auditToken = ''
+            try {
+              auditToken = await auditAndConfirm(spec)
+            } catch (err) {
+              if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
+                throw err
+              }
+              console.warn(`[dsh-plugin-vetter] 安全预审端点不可用或已停用，旁路放行: ${spec}`)
+            }
             return rawFn(spec, {
               ...(typeof options === 'object' && options !== null ? options : {}),
-              auditToken,
+              ...(auditToken ? { auditToken } : {}),
             })
           }
           ;(guarded as any).__guarded = true
@@ -505,20 +534,29 @@ function patchInstallBundle(pm: any): boolean {
         },
       })
       pm.__pluginGuardInstallBundlePatched = true
-      return true
+      return unhook
     } catch (err) {
-      console.warn('[dsh-plugin-guard] Failed to define getter on pm.installBundle:', err)
+      console.warn('[dsh-plugin-vetter] Failed to define getter on pm.installBundle:', err)
       return false
     }
   }
 
   if (typeof pm.installBundle === 'function') {
-    const rawFn = pm.installBundle.bind(pm)
+    const origInstallBundle = pm.installBundle
     const guarded = async (spec: string, options?: any) => {
-      const auditToken = await auditAndConfirm(spec)
-      return rawFn(spec, {
+      if (!isClientActive) return origInstallBundle.call(pm, spec, options)
+      let auditToken = ''
+      try {
+        auditToken = await auditAndConfirm(spec)
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
+          throw err
+        }
+        console.warn(`[dsh-plugin-vetter] 安全预审端点不可用或已停用，旁路放行: ${spec}`)
+      }
+      return origInstallBundle.call(pm, spec, {
         ...(typeof options === 'object' && options !== null ? options : {}),
-        auditToken,
+        ...(auditToken ? { auditToken } : {}),
       })
     }
     ;(guarded as any).__guarded = true
@@ -531,14 +569,14 @@ function patchInstallBundle(pm: any): boolean {
         value: guarded,
       })
       pm.__pluginGuardInstallBundlePatched = true
-      return true
+      return unhook
     } catch {
       try {
         pm.installBundle = guarded
         pm.__pluginGuardInstallBundlePatched = true
-        return true
+        return unhook
       } catch (err) {
-        console.warn('[dsh-plugin-guard] Failed to set pm.installBundle:', err)
+        console.warn('[dsh-plugin-vetter] Failed to set pm.installBundle:', err)
         return false
       }
     }
@@ -550,10 +588,25 @@ function patchInstallBundle(pm: any): boolean {
 /**
  * Safely patch install on local pluginManager.
  */
-function patchInstall(pm: any): boolean {
-  if (!pm || pm.__pluginGuardInstallPatched) return false
+function patchInstall(pm: any): (() => void) | false {
+  if (!pm) return false
+
+  if (pm.__pluginGuardInstallPatched && pm.__origInstallDesc) {
+    Object.defineProperty(pm, 'install', pm.__origInstallDesc)
+    delete pm.__origInstallDesc
+    delete pm.__pluginGuardInstallPatched
+  }
 
   const desc = Object.getOwnPropertyDescriptor(pm, 'install')
+  pm.__origInstallDesc = desc
+
+  const unhook = () => {
+    if (pm.__origInstallDesc) {
+      Object.defineProperty(pm, 'install', pm.__origInstallDesc)
+      delete pm.__origInstallDesc
+      delete pm.__pluginGuardInstallPatched
+    }
+  }
 
   if (desc?.get) {
     const origGet = desc.get
@@ -563,9 +616,21 @@ function patchInstall(pm: any): boolean {
         enumerable: true,
         get: function (this: any) {
           const rawFn = origGet.call(this)
+          if (!isClientActive) return rawFn
           const guarded = async (spec: string, ...args: any[]) => {
-            const auditToken = await auditAndConfirm(spec)
-            const decoratedSpec = spec.includes('?') ? `${spec}&auditToken=${auditToken}` : `${spec}?auditToken=${auditToken}`
+            if (!isClientActive) return rawFn(spec, ...args)
+            let auditToken = ''
+            try {
+              auditToken = await auditAndConfirm(spec)
+            } catch (err) {
+              if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
+                throw err
+              }
+              console.warn(`[dsh-plugin-vetter] 安全预审端点不可用或已停用，旁路放行: ${spec}`)
+            }
+            const decoratedSpec = auditToken
+              ? (spec.includes('?') ? `${spec}&auditToken=${auditToken}` : `${spec}?auditToken=${auditToken}`)
+              : spec
             return rawFn(decoratedSpec, ...args)
           }
           ;(guarded as any).__guarded = true
@@ -573,19 +638,30 @@ function patchInstall(pm: any): boolean {
         },
       })
       pm.__pluginGuardInstallPatched = true
-      return true
+      return unhook
     } catch (err) {
-      console.warn('[dsh-plugin-guard] Failed to define getter on pm.install:', err)
+      console.warn('[dsh-plugin-vetter] Failed to define getter on pm.install:', err)
       return false
     }
   }
 
   if (typeof pm.install === 'function') {
-    const rawFn = pm.install.bind(pm)
+    const origInstall = pm.install
     const guarded = async (spec: string, ...args: any[]) => {
-      const auditToken = await auditAndConfirm(spec)
-      const decoratedSpec = spec.includes('?') ? `${spec}&auditToken=${auditToken}` : `${spec}?auditToken=${auditToken}`
-      return rawFn(decoratedSpec, ...args)
+      if (!isClientActive) return origInstall.call(pm, spec, ...args)
+      let auditToken = ''
+      try {
+        auditToken = await auditAndConfirm(spec)
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
+          throw err
+        }
+        console.warn(`[dsh-plugin-vetter] 安全预审端点不可用或已停用，旁路放行: ${spec}`)
+      }
+      const decoratedSpec = auditToken
+        ? (spec.includes('?') ? `${spec}&auditToken=${auditToken}` : `${spec}?auditToken=${auditToken}`)
+        : spec
+      return origInstall.call(pm, decoratedSpec, ...args)
     }
     ;(guarded as any).__guarded = true
 
@@ -597,14 +673,14 @@ function patchInstall(pm: any): boolean {
         value: guarded,
       })
       pm.__pluginGuardInstallPatched = true
-      return true
+      return unhook
     } catch {
       try {
         pm.install = guarded
         pm.__pluginGuardInstallPatched = true
-        return true
+        return unhook
       } catch (err) {
-        console.warn('[dsh-plugin-guard] Failed to set pm.install:', err)
+        console.warn('[dsh-plugin-vetter] Failed to set pm.install:', err)
         return false
       }
     }
@@ -907,7 +983,7 @@ export const GuardSettingsSection: React.FC<GuardSettingsProps> = (props) => {
         }
       })
       .catch((err) => {
-        console.warn('[dsh-plugin-guard] Failed to load cache history:', err)
+        console.warn('[dsh-plugin-vetter] Failed to load cache history:', err)
       })
       .finally(() => {
         setCacheLoading(false)
@@ -926,7 +1002,7 @@ export const GuardSettingsSection: React.FC<GuardSettingsProps> = (props) => {
       })
       .catch((err) => {
         setLoading(false)
-        console.warn('[dsh-plugin-guard] Failed to load config:', err)
+        console.warn('[dsh-plugin-vetter] Failed to load config:', err)
       })
   }
 
@@ -1461,16 +1537,16 @@ export const GuardSettingsSection: React.FC<GuardSettingsProps> = (props) => {
         ),
         h(
           'div',
-          { style: S.statBox, title: cacheStats?.cacheDir || '~/.dsh/cache/plugin-guard' },
+          { style: S.statBox, title: cacheStats?.cacheDir || '~/.dsh/cache/plugin-vetter' },
           h(
             'div',
             { style: { ...S.statVal, fontSize: '12px', fontWeight: 500 } },
-            cacheStats?.cacheDir ? 'plugin-guard' : '~/.dsh/cache',
+            cacheStats?.cacheDir ? 'plugin-vetter' : '~/.dsh/cache',
           ),
           h(
             'div',
             { style: S.statLbl },
-            `本地目录: ${cacheStats?.cacheDir || '~/.dsh/cache/plugin-guard'}`,
+            `本地目录: ${cacheStats?.cacheDir || '~/.dsh/cache/plugin-vetter'}`,
           ),
         ),
       ),
@@ -1791,16 +1867,77 @@ export const GuardSettingsSection: React.FC<GuardSettingsProps> = (props) => {
   )
 }
 
+let isClientActive = false
+let origGlobalFetch: typeof fetch | null = null
+let origWindowFetch: typeof fetch | null = null
+const clientCleanups: (() => void)[] = []
+
+/**
+ * Returns whether the client guard is actively plugged in and intercepting.
+ */
+export function isClientPlugged(): boolean {
+  return isClientActive
+}
+
+/**
+ * Restores global and window fetch to their unpatched originals.
+ */
+export function unpatchFetch(): void {
+  if (origGlobalFetch && typeof globalThis !== 'undefined') {
+    globalThis.fetch = origGlobalFetch
+    try {
+      delete (globalThis.fetch as any).__pluginGuardPatched
+    } catch {}
+  }
+  if (origWindowFetch && typeof window !== 'undefined') {
+    window.fetch = origWindowFetch
+    try {
+      delete (window.fetch as any).__pluginGuardPatched
+    } catch {}
+  }
+  origGlobalFetch = null
+  origWindowFetch = null
+}
+
+/**
+ * Completely unpatches fetch, managers, and unregisters all slots (Hot Unplug).
+ */
+export function unpatchAll(): void {
+  isClientActive = false
+  unpatchFetch()
+  while (clientCleanups.length > 0) {
+    const fn = clientCleanups.pop()
+    try {
+      fn?.()
+    } catch {}
+  }
+  clearRecentApprovals()
+  inFlightAudits.clear()
+}
+
 /**
  * Safely patch global fetch to intercept third-party market APIs (e.g. dsh-m /dshm and direct install endpoints).
  */
 export function patchFetch(): boolean {
   if (typeof globalThis === 'undefined' || typeof globalThis.fetch !== 'function') return false
-  if ((globalThis.fetch as any).__pluginGuardPatched) return false
+  if ((globalThis.fetch as any).__pluginGuardPatched) {
+    isClientActive = true
+    return true
+  }
 
   const origFetch = globalThis.fetch
+  origGlobalFetch = origFetch
+  if (typeof window !== 'undefined') {
+    origWindowFetch = window.fetch
+  }
+  isClientActive = true
 
   const guardedFetch: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    // Hot-unplug bypass: if client is disabled or disposed, pass through immediately
+    if (!isClientActive) {
+      return (origGlobalFetch || origFetch)(input, init)
+    }
+
     let urlStr = ''
     if (typeof input === 'string') {
       urlStr = input
@@ -1834,15 +1971,30 @@ export function patchFetch(): boolean {
           }
 
           if (targetSpec) {
-            console.log(`[dsh-plugin-guard] 拦截到市场 ${action} 请求: ${targetSpec}，执行安全预审...`)
-            const auditToken = await auditAndConfirm(targetSpec)
+            console.log(`[dsh-plugin-vetter] 拦截到市场 ${action} 请求: ${targetSpec}，执行安全预审...`)
+            let auditToken = ''
+            try {
+              auditToken = await auditAndConfirm(targetSpec)
+            } catch (err) {
+              // If user cancelled, abort the fetch
+              if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
+                console.warn('[dsh-plugin-vetter] 插件安装已被用户取消或中止:', err.message)
+                throw err
+              }
+              // If backend guard is unavailable / offline, fail-open with a warning
+              console.warn(
+                `[dsh-plugin-vetter] 安全预审端点不可用或已停用，旁路放行安装请求: ${targetSpec} (${err instanceof Error ? err.message : String(err)})`,
+              )
+            }
 
-            // Attach auditToken to headers and body
+            // Attach auditToken to headers and body if approved
             const headers = new Headers(init.headers || {})
-            headers.set('x-audit-token', auditToken)
-            headers.set('x-guard-force', 'true')
-            bodyObj.auditToken = auditToken
-            bodyObj.force = true
+            if (auditToken) {
+              headers.set('x-audit-token', auditToken)
+              headers.set('x-guard-force', 'true')
+              bodyObj.auditToken = auditToken
+              bodyObj.force = true
+            }
 
             const newInit: RequestInit = {
               ...init,
@@ -1853,13 +2005,10 @@ export function patchFetch(): boolean {
           }
         }
       } catch (err) {
-        // If auditAndConfirm threw an error (user cancelled or refused), abort fetch!
-        if (err instanceof Error && err.message.includes('[dsh-plugin-guard]')) {
-          console.warn('[dsh-plugin-guard] 插件安装已被用户或安全策略拦截:', err.message)
+        if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
           throw err
         }
-        // If other error, rethrow
-        throw err
+        return origFetch(input, init)
       }
     }
 
@@ -1874,12 +2023,24 @@ export function patchFetch(): boolean {
         const bodyObj = JSON.parse(init.body)
         const spec = typeof bodyObj?.spec === 'string' ? bodyObj.spec : undefined
         if (spec && !bodyObj.auditToken) {
-          const auditToken = await auditAndConfirm(spec)
+          let auditToken = ''
+          try {
+            auditToken = await auditAndConfirm(spec)
+          } catch (err) {
+            if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
+              throw err
+            }
+            console.warn(
+              `[dsh-plugin-vetter] 安全预审端点不可用或已停用，旁路放行安装请求: ${spec} (${err instanceof Error ? err.message : String(err)})`,
+            )
+          }
           const headers = new Headers(init.headers || {})
-          headers.set('x-audit-token', auditToken)
-          headers.set('x-guard-force', 'true')
-          bodyObj.auditToken = auditToken
-          bodyObj.force = true
+          if (auditToken) {
+            headers.set('x-audit-token', auditToken)
+            headers.set('x-guard-force', 'true')
+            bodyObj.auditToken = auditToken
+            bodyObj.force = true
+          }
           return origFetch(input, {
             ...init,
             headers,
@@ -1887,9 +2048,10 @@ export function patchFetch(): boolean {
           })
         }
       } catch (err) {
-        if (err instanceof Error && err.message.includes('[dsh-plugin-guard]')) {
+        if (err instanceof Error && err.message.includes('[dsh-plugin-vetter] 用户')) {
           throw err
         }
+        return origFetch(input, init)
       }
     }
 
@@ -1905,7 +2067,7 @@ export function patchFetch(): boolean {
     }
     return true
   } catch (err) {
-    console.warn('[dsh-plugin-guard] Failed to hook globalThis.fetch:', err)
+    console.warn('[dsh-plugin-vetter] Failed to hook globalThis.fetch:', err)
     return false
   }
 }
@@ -1915,17 +2077,21 @@ export function patchFetch(): boolean {
  */
 export function apply(ctx: ClientContext): void {
   try {
+    isClientActive = true
     patchFetch()
 
     const hookAll = () => {
       if (ctx.remote?.pluginManager) {
-        patchInstallBundle(ctx.remote.pluginManager)
+        const unhook = patchInstallBundle(ctx.remote.pluginManager)
+        if (unhook) clientCleanups.push(unhook)
       }
       if (ctx['remote.pluginManager']) {
-        patchInstallBundle(ctx['remote.pluginManager'])
+        const unhook = patchInstallBundle(ctx['remote.pluginManager'])
+        if (unhook) clientCleanups.push(unhook)
       }
       if (ctx.pluginManager) {
-        patchInstall(ctx.pluginManager)
+        const unhook = patchInstall(ctx.pluginManager)
+        if (unhook) clientCleanups.push(unhook)
       }
     }
 
@@ -1951,46 +2117,52 @@ export function apply(ctx: ClientContext): void {
 
       // 1. DSH Main Settings Left Sidebar entry
       slots.inject('settings.section', () => {
-        return slots.register(
+        const unreg = slots.register(
           {
             name: 'settings.section',
-            id: 'plugin-guard',
+            id: 'plugin-vetter',
             order: 25,
             label: () => '安全防御',
-            locale: 'dsh-plugin-guard',
+            locale: 'dsh-plugin-vetter',
           },
           GuardSettingsSection,
         )
+        if (typeof unreg === 'function') clientCleanups.push(unreg)
+        return unreg
       })
 
       // 2. DSH Plugin Manager bundle card configuration section
       slots.inject('plugins.bundle.config', () => {
-        return slots.register(
+        const unreg = slots.register(
           {
             name: 'plugins.bundle.config',
-            key: 'dsh-plugin-guard',
-            locale: 'dsh-plugin-guard',
+            key: 'dsh-plugin-vetter',
+            locale: 'dsh-plugin-vetter',
           },
           (ownerProps: any) => {
             if (ownerProps?.view === 'summary') return null
             return h(GuardSettingsSection, { isModal: false })
           },
         )
+        if (typeof unreg === 'function') clientCleanups.push(unreg)
+        return unreg
       })
 
       // 3. DSH Plugin Manager row config
       slots.inject('plugins.row.config', () => {
-        return slots.register(
+        const unreg = slots.register(
           {
             name: 'plugins.row.config',
-            key: 'dsh-plugin-guard#dsh-plugin-guard',
-            locale: 'dsh-plugin-guard',
+            key: 'dsh-plugin-vetter#dsh-plugin-vetter',
+            locale: 'dsh-plugin-vetter',
           },
           (ownerProps: any) => {
             if (ownerProps?.view === 'summary') return null
             return h(GuardSettingsSection, { isModal: false })
           },
         )
+        if (typeof unreg === 'function') clientCleanups.push(unreg)
+        return unreg
       })
     }
 
@@ -2005,8 +2177,17 @@ export function apply(ctx: ClientContext): void {
         })
       } catch {}
     }
+
+    // Cleanup on context dispose (Hot Unplug)
+    if (typeof ctx.on === 'function') {
+      ctx.on('dispose', () => {
+        console.log('[dsh-plugin-vetter] 接收到客户端插件停用信号，执行热拔出清理...')
+        unpatchAll()
+        console.log('[dsh-plugin-vetter] 客户端安全防御组件已拔出 (Hot unplugged)')
+      })
+    }
   } catch (err) {
-    console.error('[dsh-plugin-guard] Unexpected error in client apply:', err)
+    console.error('[dsh-plugin-vetter] Unexpected error in client apply:', err)
   }
 }
 
@@ -2022,4 +2203,8 @@ export default {
   fetchCacheStats,
   clearAuditCache,
   formatAuditSummary,
+  patchFetch,
+  unpatchFetch,
+  unpatchAll,
+  isClientPlugged,
 }

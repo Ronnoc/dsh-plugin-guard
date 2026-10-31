@@ -1,7 +1,7 @@
 /**
  * Rule: Package Lifecycle & Supply Chain Guard
  * Audits package.json scripts (preinstall, postinstall, etc.) that can automatically execute code upon npm/pnpm unpack.
- * @module dsh-plugin-guard/core/rules/lifecycle
+ * @module dsh-plugin-vetter/core/rules/lifecycle
  */
 
 import type { AuditFinding, GuardRule, RuleContext } from '../types.js'

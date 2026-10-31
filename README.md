@@ -1,18 +1,18 @@
-# dsh-plugin-guard 🛡️
+# dsh-plugin-vetter 🔍🛡️
 
 <p align="center">
   <b>English</b> &nbsp;•&nbsp; <a href="README.zh.md">简体中文</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml"><img src="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/Ronnoc/dsh-plugin-vetter/actions/workflows/ci.yml"><img src="https://github.com/Ronnoc/dsh-plugin-vetter/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
-  <a href="https://www.npmjs.com/package/dsh-plugin-guard"><img src="https://img.shields.io/badge/npm-v0.1.0-orange.svg" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/dsh-plugin-vetter"><img src="https://img.shields.io/badge/npm-v0.1.0-orange.svg" alt="npm version" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg" alt="dsh-plugin" /></a>
   <a href="https://github.com/topics/cordis-plugin"><img src="https://img.shields.io/badge/framework-cordis-blueviolet.svg" alt="cordis" /></a>
 </p>
 
-> **Pre-installation Security Audit & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.**  
+> **Pre-installation Security Vetting & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.**  
 > *DeepSeek Harness (DSH) 插件安装前置安全预审与门禁拦截中间件。*
 
 ---
@@ -40,7 +40,7 @@ This exposes users to critical supply-chain risks:
   - **Privilege & Permission Escalation**: Detects attempts to tamper with prompt confirmation gates or bypass permission checks.
   - **MCP Tool Capability Audit**: Inspects exported Model Context Protocol tools for destructive capabilities.
 - 🔐 **Tamper-Proof Approval Tokens**: Generates single-use, cryptographically signed (HMAC-SHA256) approval tokens binding `package@version` and pristine tarball SHA-256. Prevents replay attacks and TOCTOU tampering.
-- ⚡ **Multi-Dimensional Local Disk Cache (4-Vector Addressing)**: Composite content-addressed caching keyed by `(model, plugin-guard version, plugin spec, tarballSha256)`.
+- ⚡ **Multi-Dimensional Local Disk Cache (4-Vector Addressing)**: Composite content-addressed caching keyed by `(model, plugin-vetter version, plugin spec, tarballSha256)`.
   - **Zero Duplicate I/O & Zero AI Token Waste**: Auditing identical package tarballs under the same model hits disk cache in milliseconds without re-extraction or repeated LLM calls.
   - **Rule Version Invalidation**: Automatic cache invalidation when rules or guard version update.
   - **Model Isolation**: Segregates verdicts across `static` rule engine and LLM models (`deepseek-chat`, `deepseek-reasoner`, etc.).
@@ -55,14 +55,14 @@ This exposes users to critical supply-chain risks:
 ```mermaid
 flowchart TD
     User["User clicks Install in Marketplace / Agent requests tool"] --> Intercept["Client Interception Gate"]
-    Intercept --> RequestAudit["POST /api/plugin-guard/audit"]
+    Intercept --> RequestAudit["POST /api/plugin-vetter/audit"]
     RequestAudit --> Staging["Safe Isolated Staging (npm pack --ignore-scripts)"]
     Staging --> Scan["Static Security Engine (6 Dimension Analysis)"]
     Scan --> Report["AuditReport Generated (Score 0-100, Verdict)"]
     Report --> Modal["Audit Modal displayed to User"]
     Modal --> Choice{"User Approves?"}
     Choice -- "No / Danger" --> Abort["Clean Sandbox & Terminate"]
-    Choice -- "Yes (or Verified Safe)" --> TokenReq["POST /api/plugin-guard/approve"]
+    Choice -- "Yes (or Verified Safe)" --> TokenReq["POST /api/plugin-vetter/approve"]
     TokenReq --> IssueToken["Issue HMAC-SHA256 Single-Use AuditToken"]
     IssueToken --> RealInstall["POST /api/plugin-manager/install + AuditToken"]
     RealInstall --> HostGate["Host Route Gate: Verify & Consume Token"]
@@ -76,19 +76,19 @@ flowchart TD
 
 ### As a DSH Plugin (Recommended)
 
-Add `dsh-plugin-guard` to your DSH profile declaration or install via CLI:
+Add `dsh-plugin-vetter` to your DSH profile declaration or install via CLI:
 
 ```bash
 # Add to current profile
-dsh plugin add dsh-plugin-guard
+dsh plugin add dsh-plugin-vetter
 ```
 
 Or declare it in your `cordis.patch.yml`:
 
 ```yaml
 - insert:
-    - id: dsh-plugin-guard
-      name: dsh-plugin-guard
+    - id: dsh-plugin-vetter
+      name: dsh-plugin-vetter
       config:
         strictMode: true          # Automatically block packages with CRITICAL findings
         scanOnInstall: true       # Enforce audit gate on install

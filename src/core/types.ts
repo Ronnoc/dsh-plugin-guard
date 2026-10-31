@@ -1,6 +1,6 @@
 /**
- * DSH Plugin Guard: Types & Schema Definitions
- * @module dsh-plugin-guard/core/types
+ * DSH Plugin Vetter: Types & Schema Definitions
+ * @module dsh-plugin-vetter/core/types
  */
 
 export type AuditSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'
@@ -74,7 +74,9 @@ export interface AuditReport {
   error?: string
   /** Model or engine identifier used for this audit */
   model?: string
-  /** Version of dsh-plugin-guard that conducted this audit */
+  /** Version of dsh-plugin-vetter that conducted this audit */
+  pluginVetterVersion?: string
+  /** Backward-compatible alias */
   pluginGuardVersion?: string
   /** Whether this report was served from local persistent cache */
   cached?: boolean
@@ -90,7 +92,7 @@ export interface AuditReport {
   evaluatedStandards?: string[]
 }
 
-export interface GuardConfig {
+export interface VetterConfig {
   /** If true, CRITICAL severity findings block installation completely */
   strictMode?: boolean
   /** Whether to intercept install operations */
@@ -103,7 +105,7 @@ export interface GuardConfig {
   stagingTtlMs?: number
   /** Secret key used to sign and verify approval tokens */
   tokenSecret?: string
-  /** Directory for persistent audit cache. Defaults to ~/.dsh/cache/plugin-guard */
+  /** Directory for persistent audit cache. Defaults to ~/.dsh/cache/plugin-vetter */
   cacheDir?: string
   /** Whether persistent local disk caching is enabled (default: true) */
   enableCache?: boolean
@@ -111,11 +113,16 @@ export interface GuardConfig {
   model?: string
 }
 
+/** Backward-compatible alias for VetterConfig */
+export type GuardConfig = VetterConfig
+
 export interface AuditCacheKey {
   /** AI Model or security engine identifier, e.g. 'static', 'deepseek-chat', 'deepseek-reasoner' */
   model: string
-  /** Version of dsh-plugin-guard that performed the audit, e.g. '0.1.0' */
-  pluginGuardVersion: string
+  /** Version of dsh-plugin-vetter that performed the audit, e.g. '0.1.0' */
+  pluginVetterVersion?: string
+  /** Backward-compatible alias */
+  pluginGuardVersion?: string
   /** Plugin package name or spec, e.g. 'dsh-plugin-foo' or 'dsh-plugin-foo@1.0.0' */
   plugin: string
   /** SHA-256 digest of the pristine tarball */
@@ -175,4 +182,13 @@ export interface GuardRule {
   category: RuleCategory
   description: string
   run(ctx: RuleContext): AuditFinding[]
+}
+
+export interface ResolvedSpecInfo {
+  originalSpec: string
+  resolvedSpec: string
+  packageName: string
+  version?: string
+  source: 'npm' | 'github' | 'url' | 'tarball'
+  isMarketId: boolean
 }

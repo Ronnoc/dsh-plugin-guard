@@ -1,13 +1,17 @@
 /**
  * DSH Plugin Guard: Cryptographic Approval Token Manager
  * Generates and validates tamper-proof, single-use, time-bound approval tokens.
- * @module dsh-plugin-guard/host/token
+ * @module dsh-plugin-vetter/host/token
  */
 
 import { createHmac, randomBytes } from 'node:crypto'
 
 export interface TokenPayload {
   spec: string
+  originalSpec?: string
+  resolvedSpec?: string
+  packageName?: string
+  version?: string
   tarballSha256?: string
   issuedAt: number
   expiresAt: number
@@ -39,7 +43,17 @@ export class TokenManager {
   /**
    * Generate a signed approval token for a specific spec and tarball SHA-256 digest.
    */
-  generateToken(spec: string, tarballSha256?: string, ttlMs?: number): string {
+  generateToken(
+    spec: string,
+    tarballSha256?: string,
+    ttlMs?: number,
+    meta?: {
+      originalSpec?: string
+      resolvedSpec?: string
+      packageName?: string
+      version?: string
+    },
+  ): string {
     this.sweepConsumed()
     const now = Date.now()
     const expiresAt = now + (ttlMs ?? this.defaultTtlMs)
@@ -47,6 +61,10 @@ export class TokenManager {
 
     const payload: TokenPayload = {
       spec: spec.trim(),
+      originalSpec: meta?.originalSpec?.trim(),
+      resolvedSpec: meta?.resolvedSpec?.trim(),
+      packageName: meta?.packageName?.trim(),
+      version: meta?.version?.trim(),
       tarballSha256: tarballSha256?.toLowerCase(),
       issuedAt: now,
       expiresAt,
@@ -98,7 +116,20 @@ export class TokenManager {
       return { valid: false, reason: 'Token 已被使用（禁止重放）' }
     }
 
-    if (payload.spec.toLowerCase() !== spec.trim().toLowerCase()) {
+    const normSpec = spec.trim().toLowerCase()
+    const targetBase = normSpec.split('@')[0]
+
+    const matchesSpec =
+      normSpec === payload.spec.toLowerCase() ||
+      (payload.originalSpec && normSpec === payload.originalSpec.toLowerCase()) ||
+      (payload.resolvedSpec && normSpec === payload.resolvedSpec.toLowerCase()) ||
+      (payload.packageName && normSpec === payload.packageName.toLowerCase()) ||
+      (payload.packageName && targetBase === payload.packageName.toLowerCase()) ||
+      (payload.packageName &&
+        payload.version &&
+        normSpec === `${payload.packageName}@${payload.version}`.toLowerCase())
+
+    if (!matchesSpec) {
       return { valid: false, reason: `Token 所属包 (${payload.spec}) 与安装目标 (${spec}) 不匹配` }
     }
 

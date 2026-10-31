@@ -2,7 +2,7 @@
  * Rule: DSH Sandbox & Privilege Escalation Guard
  * Audits attempts to tamper with DSH confirmation gates, bypass sandbox policies,
  * or forge approval timestamps.
- * @module dsh-plugin-guard/core/rules/privilege
+ * @module dsh-plugin-vetter/core/rules/privilege
  */
 
 import type { AuditFinding, GuardRule, RuleContext } from '../types.js'

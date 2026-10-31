@@ -1,7 +1,7 @@
 /**
  * Rule: MCP Tools & Capability Exposure Guard
  * Analyzes whether the plugin exports MCP tools and whether they expose high-risk destructive commands.
- * @module dsh-plugin-guard/core/rules/mcp
+ * @module dsh-plugin-vetter/core/rules/mcp
  */
 
 import type { AuditFinding, GuardRule, RuleContext } from '../types.js'

@@ -145,7 +145,7 @@ describe('AuditCacheManager', () => {
     expect(await cacheManager.get(r1Key)).toBeNull()
   })
 
-  it('invalidates cache when plugin-guard version upgrades', async () => {
+  it('invalidates cache when plugin-vetter version upgrades', async () => {
     const v1Key: AuditCacheKey = {
       model: 'static',
       pluginGuardVersion: '0.1.0',

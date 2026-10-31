@@ -1,7 +1,7 @@
 /**
  * DSH Plugin Guard: Audit Session & Interception Coordinator
  * Coordinates staging, static security scanning, cached reports, and approval tokens.
- * @module dsh-plugin-guard/host/interceptor
+ * @module dsh-plugin-vetter/host/interceptor
  */
 
 import type { AuditOptions, AuditReport, GuardConfig } from '../core/types.js'
@@ -137,6 +137,9 @@ export class GuardInterceptor {
    * when the plugin version has already been audited for the target model.
    */
   async audit(spec: string, options?: AuditOptions): Promise<AuditReport> {
+    if (this.disposed) {
+      throw new Error('[dsh-plugin-vetter] GuardInterceptor has been disposed / unplugged.')
+    }
     await this.sweepExpired()
     const key = spec.trim().toLowerCase()
     const model = options?.model || this.config.model || 'static'
@@ -210,6 +213,9 @@ export class GuardInterceptor {
     auditToken: string
     report: AuditReport
   }> {
+    if (this.disposed) {
+      throw new Error('[dsh-plugin-vetter] GuardInterceptor has been disposed / unplugged.')
+    }
     const report = await this.audit(spec, { model: options.model })
 
     // Strict mode check: cannot approve critical security risks unless explicit force is passed
@@ -217,7 +223,7 @@ export class GuardInterceptor {
       const criticalCount = report.findings.filter(f => f.severity === 'CRITICAL').length
       if (criticalCount > 0) {
         throw new Error(
-          `[dsh-plugin-guard] 严格模式 (strictMode) 已启用：拦截到 ${criticalCount} 项 CRITICAL 高危漏洞，禁止放行安装。`,
+          `[dsh-plugin-vetter] 严格模式 (strictMode) 已启用：拦截到 ${criticalCount} 项 CRITICAL 高危漏洞，禁止放行安装。`,
         )
       }
     }
@@ -227,6 +233,12 @@ export class GuardInterceptor {
       spec,
       report.tarballSha256,
       ttl,
+      {
+        originalSpec: report.originalSpec || spec,
+        resolvedSpec: report.resolvedSpec,
+        packageName: report.packageName,
+        version: report.version,
+      },
     )
 
     report.auditToken = token

@@ -1,18 +1,18 @@
-# dsh-plugin-guard 🛡️
+# dsh-plugin-vetter 🔍🛡️
 
 <p align="center">
   <a href="README.md">English</a> &nbsp;•&nbsp; <b>简体中文</b>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml"><img src="https://github.com/Ronnoc/dsh-plugin-guard/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/Ronnoc/dsh-plugin-vetter/actions/workflows/ci.yml"><img src="https://github.com/Ronnoc/dsh-plugin-vetter/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
-  <a href="https://www.npmjs.com/package/dsh-plugin-guard"><img src="https://img.shields.io/badge/npm-v0.1.0-orange.svg" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/dsh-plugin-vetter"><img src="https://img.shields.io/badge/npm-v0.1.0-orange.svg" alt="npm version" /></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/dsh--plugin-compatible-00D26A.svg" alt="dsh-plugin" /></a>
   <a href="https://github.com/topics/cordis-plugin"><img src="https://img.shields.io/badge/framework-cordis-blueviolet.svg" alt="cordis" /></a>
 </p>
 
-> **DeepSeek Harness (DSH) 插件安装前置安全预审与门禁拦截中间件。**  
+> **DeepSeek Harness (DSH) 插件安装前置安全审查 (Vetting) 与门禁拦截中间件。**  
 > *Pre-installation Security Audit & Interception Gate Middleware for DeepSeek Harness (DSH) Plugins.*
 
 ---
@@ -40,7 +40,7 @@
   - **特权越权防范**：检测是否试图篡改权限确认门禁（如伪造 `permissionConfirmedAt` 逃逸审查）。
   - **MCP 工具能力审计**：审查插件暴露给 Agent 的 MCP 工具，识别破坏性命令与文件清理操作。
 - 🔐 **防篡改放行凭证（Audit Token）**：基于 HMAC-SHA256 签发单次有效、带时间戳的防重放 Token，强制绑定 `spec` 与压缩包 SHA-256 哈希，彻底杜绝 TOCTOU 替换攻击。
-- ⚡ **本地多维持久化缓存（4 维正交隔离）**：基于 `(model, plugin-guard 版本, plugin 包名, tarball SHA-256 内容哈希)` 建立复合内容寻址缓存。
+- ⚡ **本地多维持久化缓存（4 维正交隔离）**：基于 `(model, plugin-vetter 版本, plugin 包名, tarball SHA-256 内容哈希)` 建立复合内容寻址缓存。
   - **零重复 I/O 与零 AI Token 消耗**：同一插件版本在相同模型与规则下仅需审计一次，再次安装直接命中本地磁盘缓存。
   - **规则版本自动失效**：Guard 规则或引擎版本升级时，旧版缓存自动隔离并触发全量重审，杜绝安全盲区。
   - **跨模型完全隔离**：支持 `static` 静态引擎与各类 LLM（如 `deepseek-chat`、`deepseek-reasoner`）独立分权缓存，结论互不混淆。
@@ -55,14 +55,14 @@
 ```mermaid
 flowchart TD
     User["用户在市场点击安装 / Agent 触发安装"] --> Intercept["Client 端安装拦截器"]
-    Intercept --> RequestAudit["POST /api/plugin-guard/audit"]
+    Intercept --> RequestAudit["POST /api/plugin-vetter/audit"]
     RequestAudit --> Staging["安全隔离暂存区 (npm pack --ignore-scripts)"]
     Staging --> Scan["6 维静态安全分析引擎"]
     Scan --> Report["生成 AuditReport (评级 SAFE / CAUTION / DANGEROUS)"]
     Report --> Modal["向用户弹出安全审查报告与风险条目"]
     Modal --> Choice{"用户是否批准放行？"}
     Choice -- "拒绝 / 高危终止" --> Abort["自动清空暂存沙箱，终止安装"]
-    Choice -- "批准放行 (或评估为完全安全)" --> TokenReq["POST /api/plugin-guard/approve"]
+    Choice -- "批准放行 (或评估为完全安全)" --> TokenReq["POST /api/plugin-vetter/approve"]
     TokenReq --> IssueToken["签发 HMAC-SHA256 单次有效 AuditToken"]
     IssueToken --> RealInstall["调用原生安装 + 携带 AuditToken"]
     RealInstall --> HostGate["Host 端路由门禁：校验并销毁 Token"]
@@ -79,15 +79,15 @@ flowchart TD
 通过命令行添加到当前 profile：
 
 ```bash
-dsh plugin add dsh-plugin-guard
+dsh plugin add dsh-plugin-vetter
 ```
 
 或在 profile 的 `cordis.patch.yml` 中声明挂载：
 
 ```yaml
 - insert:
-    - id: dsh-plugin-guard
-      name: dsh-plugin-guard
+    - id: dsh-plugin-vetter
+      name: dsh-plugin-vetter
       config:
         strictMode: true          # 发现 CRITICAL 高危漏洞时自动阻断安装
         scanOnInstall: true       # 拦截所有插件安装
