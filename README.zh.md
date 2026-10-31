@@ -57,21 +57,34 @@
 ## 🏗️ 架构设计图
 
 ```mermaid
-flowchart TD
-    User["用户在市场点击安装 / Agent 触发安装"] --> Intercept["Client 端安装拦截器"]
-    Intercept --> RequestAudit["POST /api/plugin-vetter/audit"]
-    RequestAudit --> Staging["安全隔离暂存区 (npm pack --ignore-scripts)"]
-    Staging --> Scan["6 维静态安全分析引擎"]
-    Scan --> Report["生成 AuditReport (评级 SAFE / CAUTION / DANGEROUS)"]
-    Report --> Modal["向用户弹出安全审查报告与风险条目"]
-    Modal --> Choice{"用户是否批准放行？"}
-    Choice -- "拒绝 / 高危终止" --> Abort["自动清空暂存沙箱，终止安装"]
-    Choice -- "批准放行 (或评估为完全安全)" --> TokenReq["POST /api/plugin-vetter/approve"]
-    TokenReq --> IssueToken["签发 HMAC-SHA256 单次有效 AuditToken"]
-    IssueToken --> RealInstall["调用原生安装 + 携带 AuditToken"]
-    RealInstall --> HostGate["Host 端路由门禁：校验并销毁 Token"]
-    HostGate -- 校验通过 --> NativeInstall["交给官方 plugin-manager 执行真实落盘"]
-    HostGate -- 无 Token / 篡改 --> Reject["403 Forbidden: 拒绝安装"]
+flowchart LR
+    subgraph P1["1. 拦截与安全隔离"]
+        direction TB
+        Trigger["触发安装请求\n(市场点击 / Agent调用)"] --> ClientGate["Client 端 UI 门禁拦截\n(挂载 Fetch / 拦截请求)"]
+        ClientGate --> Staging["静态沙箱暂存\n(npm pack --ignore-scripts)"]
+    end
+
+    subgraph P2["2. 双引擎安全审查"]
+        direction TB
+        Cache{"4D 本地缓存命中?"}
+        Cache -- 未命中 --> Static["6 维静态安全规则扫描\n(凭证/执行/网络/MCP)"]
+        Static --> Agent["Agentic 大模型语义审查\n(意图偏差研判与打分)"]
+        Agent --> Report["生成综合审计报告\n(SAFE / CAUTION / DANGEROUS)"]
+        Cache -- 命中 --> Report
+    end
+
+    subgraph P3["3. 令牌门禁与落地"]
+        direction TB
+        Gate{"用户审批 / 策略门禁"}
+        Gate -- 批准放行 --> Token["签发防重放 AuditToken\n(HMAC-SHA256 绑定 Hash)"]
+        Token --> HostGate["Host 端路由门禁拦截\n(/api/plugin-manager/install)"]
+        HostGate -- 校验通过 --> Install["DSH 原生包管理器安全落地"]
+        Gate -- 拒绝终止 --> Abort["销毁暂存沙箱，安全阻断"]
+        HostGate -- 无Token/篡改 --> Reject["403 Forbidden: 拒绝安装"]
+    end
+
+    Staging --> Cache
+    Report --> Gate
 ```
 
 ---

@@ -57,21 +57,34 @@ This exposes users to critical supply-chain risks:
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart TD
-    User["User clicks Install in Marketplace / Agent requests tool"] --> Intercept["Client Interception Gate"]
-    Intercept --> RequestAudit["POST /api/plugin-vetter/audit"]
-    RequestAudit --> Staging["Safe Isolated Staging (npm pack --ignore-scripts)"]
-    Staging --> Scan["Static Security Engine (6 Dimension Analysis)"]
-    Scan --> Report["AuditReport Generated (Score 0-100, Verdict)"]
-    Report --> Modal["Audit Modal displayed to User"]
-    Modal --> Choice{"User Approves?"}
-    Choice -- "No / Danger" --> Abort["Clean Sandbox & Terminate"]
-    Choice -- "Yes (or Verified Safe)" --> TokenReq["POST /api/plugin-vetter/approve"]
-    TokenReq --> IssueToken["Issue HMAC-SHA256 Single-Use AuditToken"]
-    IssueToken --> RealInstall["POST /api/plugin-manager/install + AuditToken"]
-    RealInstall --> HostGate["Host Route Gate: Verify & Consume Token"]
-    HostGate -- Valid --> NativeInstall["Execute Native Package Installation"]
-    HostGate -- Invalid --> Reject["403 Forbidden: Missing/Invalid Token"]
+flowchart LR
+    subgraph P1["1. Intercept & Isolate"]
+        direction TB
+        Trigger["Install Request\n(Marketplace / Agent)"] --> ClientGate["Client UI Gate\n(Intercept & Freeze)"]
+        ClientGate --> Staging["Isolated Staging Sandbox\n(npm pack --ignore-scripts)"]
+    end
+
+    subgraph P2["2. Dual-Engine Audit"]
+        direction TB
+        Cache{"4D Cache Hit?"}
+        Cache -- Miss --> Static["6-Vector Static Analysis\n(Secrets/Exec/Network/MCP)"]
+        Static --> Agent["Agentic LLM Intent Review\n(Discrepancy & Score)"]
+        Agent --> Report["Audit Report Generated\n(SAFE / CAUTION / DANGEROUS)"]
+        Cache -- Hit --> Report
+    end
+
+    subgraph P3["3. Cryptographic Gate & Install"]
+        direction TB
+        Gate{"User / Policy Gate"}
+        Gate -- Approved --> Token["Mint Single-Use AuditToken\n(HMAC-SHA256 Signed)"]
+        Token --> HostGate["Host Route Gate\n(/api/plugin-manager/install)"]
+        HostGate -- Valid --> Install["DSH Native Package Manager\n(Install to Disk)"]
+        Gate -- Rejected --> Abort["Abort & Purge Staging"]
+        HostGate -- Invalid --> Reject["403 Forbidden: Blocked"]
+    end
+
+    Staging --> Cache
+    Report --> Gate
 ```
 
 ---
